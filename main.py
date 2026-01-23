@@ -21,9 +21,11 @@ RESULT_DIR = BASE_DIR / "result"
 
 DIGITS_5 = re.compile(r"^\d{5}$")
 
+
 def cleanup_and_wait():
     shutil.rmtree(BASE_DIR / "__pycache__", ignore_errors=True)
     input("Press Enter to exit...")
+
 
 def clean_ifs_dir():
     for p in IFS_DIR.iterdir():
@@ -34,6 +36,17 @@ def clean_ifs_dir():
         else:
             shutil.rmtree(p, ignore_errors=True)
 
+
+def safe_move(src: Path, dst: Path, retries=50, delay=0.2):
+    for _ in range(retries):
+        try:
+            shutil.move(src, dst)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    raise PermissionError(f"Failed to move file after retries: {src}")
+
+
 def run_one2bme(one_file: Path):
     tmp = BASE_DIR / one_file.name
     shutil.copy(one_file, tmp)
@@ -41,12 +54,13 @@ def run_one2bme(one_file: Path):
     subprocess.Popen([str(BASE_DIR / "one2bme.exe")], cwd=BASE_DIR)
     time.sleep(2)
     pyautogui.press("enter")
-    time.sleep(2)
+    time.sleep(1)
 
     for bme in BASE_DIR.glob("*.bme"):
-        shutil.move(bme, BME_DIR / bme.name)
+        safe_move(bme, BME_DIR / bme.name)
 
     tmp.unlink(missing_ok=True)
+
 
 def handle_media(song_id: str, final_dir: Path):
     MEDIA_DIR.mkdir(exist_ok=True)
@@ -78,6 +92,7 @@ def handle_media(song_id: str, final_dir: Path):
     else:
         print(f'Chart converted in "\\result\\{final_dir.name}" folder')
 
+
 def main():
     BME_DIR.mkdir(exist_ok=True)
     RESULT_DIR.mkdir(exist_ok=True)
@@ -104,10 +119,7 @@ def main():
         tmp_ifs = IFS_DIR / ifs.name
         shutil.copy(ifs, tmp_ifs)
 
-        subprocess.run(
-            [str(IFS_DIR / "ifs_extract.exe"), str(tmp_ifs)],
-            cwd=IFS_DIR
-        )
+        subprocess.run([str(IFS_DIR / "ifs_extract.exe"), str(tmp_ifs)], cwd=IFS_DIR)
 
         out_dir = IFS_DIR / ifs.stem
         if not out_dir.exists():
@@ -129,27 +141,14 @@ def main():
 
         if dx2_out:
             shutil.copy(dx2_out[0], DX2_DIR / dx2_out[0].name)
-
-            subprocess.run(
-                [str(DX2_DIR / "2dx_extract.exe"), str(DX2_DIR / dx2_out[0].name)],
-                cwd=DX2_DIR
-            )
-
-            subprocess.run(
-                ["python", "rename.py", str(DX2_DIR)],
-                cwd=WMA2WAV_DIR
-            )
+            subprocess.run([str(DX2_DIR / "2dx_extract.exe"), dx2_out[0].name], cwd=DX2_DIR)
 
         elif s3p_out:
             shutil.copy(s3p_out[0], INPUT_DIR / s3p_out[0].name)
-
             tmp = S3P_DIR / s3p_out[0].name
             shutil.copy(s3p_out[0], tmp)
 
-            subprocess.run(
-                [str(S3P_DIR / "s3p_extract.exe"), str(tmp)],
-                cwd=S3P_DIR
-            )
+            subprocess.run([str(S3P_DIR / "s3p_extract.exe"), str(tmp)], cwd=S3P_DIR)
 
             out_s3p = S3P_DIR / f"{s3p_out[0].stem}.s3p.out"
             for _ in range(30):
@@ -157,15 +156,8 @@ def main():
                     break
                 time.sleep(1)
 
-            subprocess.run(
-                ["python", "wma2wav.py", str(out_s3p)],
-                cwd=WMA2WAV_DIR
-            )
-
-            subprocess.run(
-                ["python", "rename.py", str(WMA2WAV_DIR / "output .wav")],
-                cwd=WMA2WAV_DIR
-            )
+            subprocess.run(["python", "wma2wav.py", str(out_s3p)], cwd=WMA2WAV_DIR)
+            subprocess.run(["python", "rename.py", str(WMA2WAV_DIR / "output .wav")], cwd=WMA2WAV_DIR)
 
         shutil.rmtree(out_dir, ignore_errors=True)
         tmp_ifs.unlink(missing_ok=True)
@@ -179,10 +171,7 @@ def main():
             tmp = S3P_DIR / f.name
             shutil.copy(f, tmp)
 
-            subprocess.run(
-                [str(S3P_DIR / "s3p_extract.exe"), str(tmp)],
-                cwd=S3P_DIR
-            )
+            subprocess.run([str(S3P_DIR / "s3p_extract.exe"), str(tmp)], cwd=S3P_DIR)
 
             out_dir = S3P_DIR / f"{f.stem}.s3p.out"
             for _ in range(30):
@@ -190,15 +179,8 @@ def main():
                     break
                 time.sleep(1)
 
-            subprocess.run(
-                ["python", "wma2wav.py", str(out_dir)],
-                cwd=WMA2WAV_DIR
-            )
-
-            subprocess.run(
-                ["python", "rename.py", str(WMA2WAV_DIR / "output .wav")],
-                cwd=WMA2WAV_DIR
-            )
+            subprocess.run(["python", "wma2wav.py", str(out_dir)], cwd=WMA2WAV_DIR)
+            subprocess.run(["python", "rename.py", str(WMA2WAV_DIR / "output .wav")], cwd=WMA2WAV_DIR)
 
             shutil.rmtree(out_dir, ignore_errors=True)
             tmp.unlink(missing_ok=True)
@@ -209,13 +191,13 @@ def main():
     final_dir.mkdir(exist_ok=True)
 
     for f in BME_DIR.glob("*"):
-        shutil.move(f, final_dir / f.name)
+        safe_move(f, final_dir / f.name)
 
     for f in DX2_DIR.glob("*.wav"):
-        shutil.move(f, final_dir / f.name)
+        safe_move(f, final_dir / f.name)
 
     for f in (WMA2WAV_DIR / "output .wav").glob("*.wav"):
-        shutil.move(f, final_dir / f.name)
+        safe_move(f, final_dir / f.name)
 
     for f in DX2_DIR.glob("*.2dx"):
         f.unlink(missing_ok=True)
@@ -228,6 +210,7 @@ def main():
 
     shutil.rmtree(BASE_DIR / "__pycache__", ignore_errors=True)
     input("Press Enter to exit...")
+
 
 if __name__ == "__main__":
     main()
