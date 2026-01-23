@@ -13,4 +13,4 @@
 5. Follow instructions in console
 6. Get result in "result" folder
 
-**Tested on Windows 11 and Python 3.14.2, 1 chart per script launch**
+**Tested on Windows 11, ffmpeg and Python 3.14.2 should be installed and added to PATH, 1 chart per script launch, probably doesn't work with omnimix charts**
