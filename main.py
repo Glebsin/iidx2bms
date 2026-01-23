@@ -70,7 +70,7 @@ def handle_media(song_id: str, final_dir: Path):
         shutil.move(mp4s[0], dst)
 
     if not has_png and not has_mp4:
-        print(f'Add STAGEFILE as 1.png and BGA {song_id}.mp4 into "\\result\\{final_dir.name}" if you want')
+        print(f'Add STAGEFILE 1.png and BGA {song_id}.mp4 into "\\result\\{final_dir.name}" if you want')
     elif has_png and not has_mp4:
         print(f'Add BGA {song_id}.mp4 into "\\result\\{final_dir.name}" if you want')
     elif not has_png and has_mp4:
