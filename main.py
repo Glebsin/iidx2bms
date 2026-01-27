@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import bme_format
 import re
+import remywiki_search
 
 BASE_DIR = Path(__file__).parent
 
@@ -27,6 +28,18 @@ def full_cleanup_start():
     if BME_DIR.exists():
         shutil.rmtree(BME_DIR, ignore_errors=True)
     BME_DIR.mkdir(exist_ok=True)
+
+    if (WMA2WAV_DIR / "output .wav").exists():
+        shutil.rmtree(WMA2WAV_DIR / "output .wav", ignore_errors=True)
+    (WMA2WAV_DIR / "output .wav").mkdir(parents=True, exist_ok=True)
+
+    if S3P_DIR.exists():
+        for p in S3P_DIR.iterdir():
+            if p.name.lower() != "s3p_extract.exe":
+                if p.is_file():
+                    p.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(p, ignore_errors=True)
 
     if DX2_DIR.exists():
         for p in DX2_DIR.iterdir():
@@ -203,6 +216,8 @@ def main():
 
         if s3p:
             extract_s3p(s3p)
+
+    remywiki_search.remywiki_search_loop()
 
     title = bme_format.run(BME_DIR, song_id)
 
