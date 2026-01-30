@@ -15,4 +15,4 @@
 7. Get result in "result" folder
 
 **Tested on Windows 11, ffmpeg and Python 3.14.2 should be installed and added to PATH, 1 chart per script launch, probably doesn't work with omnimix charts.
-If you want get preview files download - `https://github.com/Glebsin/2dx_preview_extractor`**
+If you want get preview files download - https://github.com/Glebsin/2dx_preview_extractor**
