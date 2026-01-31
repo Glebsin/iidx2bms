@@ -14,6 +14,8 @@
 6. Follow instructions in console
 7. Get result in "result" folder
 
-**Tested on Windows 11 in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream),  ffmpeg and Python 3.14.2 should be installed and added to PATH, 1 chart per script launch, probably doesn't work with omnimix charts.**
+**Tested on Windows 11, ffmpeg and Python 3.14.2 should be installed and added to PATH, 1 chart per script launch, probably doesn't work with omnimix charts.**
+
+**Converted charts tested only in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream)**
 
 **If you want get preview files download - https://github.com/Glebsin/2dx_preview_extractor**
