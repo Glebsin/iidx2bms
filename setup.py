@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).parent
 def main():
     folders = [
         BASE_DIR / ".bme files",
-        BASE_DIR / "put .1 and .s3p or only .ifs files here",
+        BASE_DIR / "put .1, .s3p and _pre.2dx or only .ifs files here",
         BASE_DIR / "put .png and .mp4 here",
         BASE_DIR / "result",
         BASE_DIR / "wma2wav" / "output .wav",
