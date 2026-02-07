@@ -4,22 +4,76 @@ from pathlib import Path
 import shutil
 import bme_format
 import re
+import json
 import remywiki_search
 
 BASE_DIR = Path(__file__).parent
 
-INPUT_DIR = BASE_DIR / "put .1 and .s3p or only .ifs files here"
+INPUT_DIR = BASE_DIR / "put .1, .s3p and _pre.2dx or only .ifs files here"
 MEDIA_DIR = BASE_DIR / "put .png and .mp4 here"
 
 S3P_DIR = BASE_DIR / "s3p_extract"
 IFS_DIR = BASE_DIR / "ifs_extract"
 DX2_DIR = BASE_DIR / "2dx_extract"
+PREVIEW_DIR = BASE_DIR / "2dx_preview_extractor"
 WMA2WAV_DIR = BASE_DIR / "wma2wav"
 
 BME_DIR = BASE_DIR / ".bme files"
 RESULT_DIR = BASE_DIR / "result"
+SETTINGS_PATH = BASE_DIR / "settings.json"
 
 DIGITS_5 = re.compile(r"^\d{5}$")
+
+
+def load_saved_preview_choice():
+    if not SETTINGS_PATH.exists():
+        return None
+
+    try:
+        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    value = data.get("preview_auto_generator")
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def save_preview_choice(choice: bool):
+    data = {}
+    if SETTINGS_PATH.exists():
+        try:
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = {}
+
+    data["preview_auto_generator"] = choice
+    SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def ask_preview_choice():
+    saved_choice = load_saved_preview_choice()
+    if saved_choice is not None:
+        return saved_choice
+
+    while True:
+        answer = input(
+            "Add preview_auto_generator.wav? (y/n, Enter = y, type ys/ns to save and remember choice): "
+        ).strip().lower()
+
+        if answer in {"", "y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        if answer == "ys":
+            save_preview_choice(True)
+            return True
+        if answer == "ns":
+            save_preview_choice(False)
+            return False
+
+        print("Invalid input. Use y, n, ys, ns, or Enter.")
 
 
 def full_cleanup_start():
@@ -50,7 +104,7 @@ def full_cleanup_start():
                     shutil.rmtree(p, ignore_errors=True)
 
 
-def final_cleanup():
+def final_cleanup(keep_input: bool = False):
     if IFS_DIR.exists():
         for p in IFS_DIR.iterdir():
             if p.name.lower() != "ifs_extract.exe":
@@ -67,7 +121,7 @@ def final_cleanup():
                 else:
                     shutil.rmtree(p, ignore_errors=True)
 
-    if INPUT_DIR.exists():
+    if INPUT_DIR.exists() and not keep_input:
         for p in INPUT_DIR.iterdir():
             if p.is_file():
                 p.unlink(missing_ok=True)
@@ -171,12 +225,24 @@ def handle_media(song_id: str, final_dir: Path):
 def main():
     full_cleanup_start()
 
+    if not INPUT_DIR.exists():
+        input('Folder "put .1, .s3p and _pre.2dx or only .ifs files here" is empty')
+        final_cleanup()
+        return
     files = list(INPUT_DIR.iterdir())
+    if not files:
+        input('Folder "put .1, .s3p and _pre.2dx or only .ifs files here" is empty')
+        final_cleanup()
+        return
+
+    want_preview = ask_preview_choice()
     ifs = next((f for f in files if f.suffix.lower() == ".ifs"), None)
     one = next((f for f in files if f.suffix.lower() == ".1"), None)
     s3p = next((f for f in files if f.suffix.lower() == ".s3p"), None)
+    pre_dx2 = next((f for f in files if f.name.lower().endswith("_pre.2dx")), None)
 
     song_id = None
+    preview_dx2 = None
 
     if ifs:
         song_id = ifs.stem
@@ -191,11 +257,32 @@ def main():
         one = next(out.glob("*.1"), None)
         s3p = next(out.glob("*.s3p"), None)
         dx2 = next((f for f in out.glob("*.2dx") if not f.name.endswith("_pre.2dx")), None)
+        pre_dx2 = next((f for f in out.glob("*_pre.2dx")), None)
 
-        if not one or not DIGITS_5.fullmatch(one.stem):
-            input("Non-standard .ifs file, convert manually. Press Enter to exit...")
+        files_in_out = [f for f in out.iterdir() if f.is_file()]
+        if (
+            not one
+            or not DIGITS_5.fullmatch(one.stem)
+            or not dx2
+            or len(files_in_out) not in (2, 3)
+            or any(
+                f.name not in {one.name, dx2.name, pre_dx2.name if pre_dx2 else None}
+                for f in files_in_out
+            )
+        ):
+            input("Non-standard .ifs file, convert this chart manually. Press Enter to exit...")
             final_cleanup()
             return
+        if want_preview:
+            if not pre_dx2:
+                input(f'To create preview_auto_generator.wav, extracted file "{song_id}_pre.2dx" was not found in "ifs_extract\\{song_id}". Press Enter to exit...')
+                final_cleanup()
+                return
+            if pre_dx2.stem != f"{song_id}_pre":
+                input("Non-standard .ifs file, convert this chart manually. Press Enter to exit...")
+                final_cleanup()
+                return
+            preview_dx2 = pre_dx2
 
         shutil.copy(one, INPUT_DIR / one.name)
         run_one2bme(one)
@@ -212,6 +299,17 @@ def main():
             return
 
         song_id = one.stem
+        if want_preview:
+            if not pre_dx2:
+                input('To create preview_auto_generator.wav, put xxxxx_pre.2dx in folder "put .1, .s3p and _pre.2dx or only .ifs files here". Press Enter to exit...')
+                final_cleanup(keep_input=True)
+                return
+            if pre_dx2.stem != f"{song_id}_pre":
+                input("Non-standard input files, convert this chart manually. Press Enter to exit...")
+                final_cleanup()
+                return
+            preview_dx2 = pre_dx2
+
         run_one2bme(one)
 
         if s3p:
@@ -220,8 +318,13 @@ def main():
     remywiki_search.remywiki_search_loop()
 
     title = bme_format.run(BME_DIR, song_id)
-
-    final_dir = RESULT_DIR / f"{song_id} {title}"
+    title_clean = title.strip()
+    title_safe = re.sub(r'[<>:"/\\|?*]', "", title_clean)
+    title_safe = re.sub(r"\s+", " ", title_safe).strip()
+    if title_safe:
+        final_dir = RESULT_DIR / f"{song_id} {title_safe}"
+    else:
+        final_dir = RESULT_DIR / f"{song_id}"
     final_dir.mkdir(parents=True, exist_ok=True)
 
     for f in BME_DIR.glob("*"):
@@ -232,6 +335,15 @@ def main():
 
     for f in DX2_DIR.glob("*.wav"):
         shutil.move(f, final_dir / f.name)
+
+    if want_preview and preview_dx2:
+        subprocess.run(
+            ["python", str(PREVIEW_DIR / "2dx_preview_extractor.py"), str(preview_dx2)],
+            cwd=BASE_DIR
+        )
+        preview_wav = PREVIEW_DIR / "preview_auto_generator.wav"
+        if preview_wav.exists():
+            shutil.move(preview_wav, final_dir / preview_wav.name)
 
     handle_media(song_id, final_dir)
 
