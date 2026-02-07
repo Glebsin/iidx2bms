@@ -8,7 +8,7 @@
 
 1. Install requirements `python -m pip install requests beautifulsoup4`
 2. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2025.207.0/iidx2bms.zip) from Release
-    1. Run "setup.bat" if you downloaded zip from "code" tab
+    - Run "setup.bat" if you downloaded zip from "code" tab
 3. Put .1, .s3p and _pre.2dx or only .ifs files in folder "put .1, .s3p and _pre.2dx or only .ifs files here"
 4. If you want put .png and .mp4 with any name in folder "put .png and .mp4 here"
 5. Run "run.bat"
