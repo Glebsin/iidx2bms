@@ -2,6 +2,10 @@
     iidx2bms
 </h1>
 
+<div align="center">
+    <img src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" width="200" height="200">
+</div>
+
 <div align="center">Tools for converting iidx charts to bms charts</div>
 
 # HOW TO USE
