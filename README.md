@@ -1,18 +1,12 @@
-<div align="center" style="font-size: 40px; font-weight: bold;">
-    iidx2bms
-</div>
-
 <div align="center">
-    <img 
-        src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" 
-        width="200" 
-        height="200"
-        style="pointer-events: none;"
-        draggable="false"
-    >
-</div>
 
-<div align="center">Tools for converting iidx charts to bms charts</div>
+# iidx2bms
+
+<img src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" width="200">
+
+Tools for converting iidx charts to bms charts
+
+</div>
 
 # HOW TO USE
 
