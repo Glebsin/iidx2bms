@@ -1,6 +1,6 @@
-<h1 align="center">
+<div align="center" style="font-size: 40px; font-weight: bold;">
     iidx2bms
-</h1>
+</div>
 
 <div align="center">
     <img src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" width="200" height="200">
