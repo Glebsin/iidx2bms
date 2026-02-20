@@ -4,8 +4,7 @@
     <img src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" width="200">
 
     <p>Tools for converting iidx charts to bms charts</p>
-</div>
-
+    
 </div>
 
 # HOW TO USE
