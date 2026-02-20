@@ -6,7 +6,7 @@
   <p>Tools for converting iidx charts to bms charts</p>
 </div>
 
-# HOW TO USE (old release)
+# HOW TO USE (for 2026.207.0 release)
 
 1. Install requirements `python -m pip install requests beautifulsoup4`
 2. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2025.207.0/iidx2bms.zip) from Releases
