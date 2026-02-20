@@ -1,10 +1,11 @@
 <div align="center">
-    <h1>iidx2bms</h1>
 
-    <img src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" width="200">
+# iidx2bms
 
-    <p>Tools for converting iidx charts to bms charts</p>
-    
+<img src="https://raw.githubusercontent.com/Glebsin/iidx2bms/refs/heads/resources/iidx2bms_logo.svg" width="200">
+
+Tools for converting iidx charts to bms charts
+
 </div>
 
 # HOW TO USE
