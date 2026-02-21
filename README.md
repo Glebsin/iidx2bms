@@ -13,9 +13,9 @@
 3. Choose your `\contents\data\sound\` and `\contents\data\movie\` paths in **`Settings`** --> **`File paths`** 
 4. Find charts that you want to convert in search bar
 5. Select charts by double-clicking or pressing enter
-6. Click "Start conversion" button
+6. Click `Start conversion` button
 7. Solve problems if chart has non-standard symbols in chart name or genre
-8. Get result in "result" folder
+8. Get result in `Result` folder
 
 **Tested on Windows 11, doesn't work with omnimix charts, doesn't work with charts that have non xxxxx.2dx files**
 
