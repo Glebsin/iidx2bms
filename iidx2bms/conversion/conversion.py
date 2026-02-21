@@ -70,6 +70,52 @@ def _run_external_command(
     return completed.returncode, output
 
 
+def _python_script_launchers() -> list[list[str]]:
+    if not getattr(sys, "frozen", False):
+        return [[sys.executable]]
+
+    launchers: list[list[str]] = []
+    base_executable = str(getattr(sys, "_base_executable", "") or "").strip()
+    if base_executable:
+        base_path = Path(base_executable)
+        if base_path.name.lower().startswith("python"):
+            launchers.append([str(base_path)])
+
+    py_launcher = shutil.which("py")
+    if py_launcher:
+        launchers.append([py_launcher, "-3"])
+
+    python_launcher = shutil.which("python")
+    if python_launcher:
+        launchers.append([python_launcher])
+
+    return launchers
+
+
+def _run_python_script(script_path: Path, args: list[Path | str], working_directory: Path) -> None:
+    launchers = _python_script_launchers()
+    if not launchers:
+        raise RuntimeError(
+            "No Python launcher found for running helper scripts in onefile build. "
+            "Install Python launcher (`py`) or Python runtime."
+        )
+
+    attempts: list[str] = []
+    argv = [str(script_path), *[str(value) for value in args]]
+    for launcher in launchers:
+        code, output = _run_external_command(
+            [*launcher, *argv],
+            working_directory,
+            raise_on_error=False,
+        )
+        if code == 0:
+            return
+        tail = " | ".join((output or "").strip().splitlines()[-3:])
+        attempts.append(f"cmd={' '.join([*launcher, *argv])} code={code} out={tail}")
+
+    raise RuntimeError("Helper script failed:\n" + "\n".join(attempts))
+
+
 def _find_chart_source(sound_root: Path, song_id_display: str) -> tuple[str, dict[str, Path]]:
     base_dirs = [sound_root / song_id_display, sound_root]
     for base_dir in base_dirs:
@@ -111,10 +157,7 @@ def _prepare_from_ifs(
     copied_ifs = _copy_chart_files({"ifs": ifs_file}, work_dir)["ifs"]
     ifs_unpack_script = project_root / "ifs_unpack" / "ifs_unpack.py"
     out_dir = work_dir / f"{song_id_display}_ifs"
-    _run_external_command(
-        [sys.executable, str(ifs_unpack_script), str(copied_ifs), "-o", str(out_dir)],
-        work_dir,
-    )
+    _run_python_script(ifs_unpack_script, [copied_ifs, "-o", out_dir], work_dir)
 
     extracted_chart_dir = out_dir / song_id_display
     if not extracted_chart_dir.is_dir():
@@ -155,7 +198,7 @@ def _prepare_from_ifs(
 
 def _extract_wavs_from_2dx(project_root: Path, work_dir: Path, archive_path: Path) -> Path:
     script_path = project_root / "2dx_extract" / "2dx_extract.py"
-    _run_external_command([sys.executable, str(script_path), str(archive_path)], work_dir)
+    _run_python_script(script_path, [archive_path], work_dir)
     out_dir = work_dir / f"{archive_path.name}.out"
     if not out_dir.is_dir():
         raise RuntimeError(f"2DX output folder not found: {out_dir}")
@@ -164,7 +207,7 @@ def _extract_wavs_from_2dx(project_root: Path, work_dir: Path, archive_path: Pat
 
 def _extract_wavs_from_s3p(project_root: Path, work_dir: Path, archive_path: Path) -> Path:
     script_path = project_root / "s3p_extract" / "s3p_extract.py"
-    _run_external_command([sys.executable, str(script_path), str(archive_path)], work_dir)
+    _run_python_script(script_path, [archive_path], work_dir)
     out_dir = work_dir / f"{archive_path.name}.out"
     if not out_dir.is_dir():
         raise RuntimeError(f"S3P output folder not found: {out_dir}")
