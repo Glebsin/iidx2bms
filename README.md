@@ -3,7 +3,7 @@
 
   <img src="https://github.com/Glebsin/iidx2bms/blob/resources/iidx2bms_logo.svg?raw=true" width="200" alt="iidx2bms logo">
 
-  <p>Tools for converting iidx charts to bms charts</p>
+  <p>Tools for converting iidx 33 charts to bms charts</p>
 </div>
 
 # HOW TO USE (for 2026.221.0 pre-release)
