@@ -6,6 +6,21 @@
   <p>Tools for converting iidx charts to bms charts</p>
 </div>
 
+# HOW TO USE (for 2026.221.0 pre-release)
+
+1. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2026.221.0/iidx2bms.zip) from Releases
+2. Launch iidx2bms.exe
+3. Choose your `\contents\data\sound\` and `\contents\data\movie\` paths in **`Settings`** --> **`File paths`** 
+4. Find charts that you want to convert in search bar
+5. Select charts by double-clicking or pressing enter
+6. Click "Start conversion" button
+7. Solve problems if chart has non-standard symbols in chart name or genre
+8. Get result in "result" folder
+
+**Tested on Windows 11, doesn't work with omnimix charts, doesn't work with charts that have non xxxxx.2dx files**
+
+**Converted charts tested only in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream) and probably working only there (or in common beatoraja too idk)**
+
 # HOW TO USE (for 2026.207.0 release)
 
 1. Install requirements `python -m pip install requests beautifulsoup4`
