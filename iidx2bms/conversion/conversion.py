@@ -26,6 +26,18 @@ _BME_REMOVE_PREFIXES = (
 _GAME_VERSION_CACHE: dict[str, dict[int, int]] = {}
 _SONG_META_CACHE: dict[str, dict[int, dict[str, object]]] = {}
 _MOVIE_FILE_CACHE: dict[str, dict[str, Path]] = {}
+_TEMP_DIR_PREFIX = "iidx2bms_"
+
+
+def cleanup_temp_workdirs() -> int:
+    temp_dir = Path(tempfile.gettempdir())
+    removed = 0
+    for path in temp_dir.glob(f"{_TEMP_DIR_PREFIX}*"):
+        if not path.is_dir():
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+    return removed
 
 
 def _sanitize_result_folder_name(text: str) -> str:
@@ -230,16 +242,25 @@ def _run_one2bme(project_root: Path, work_dir: Path, one_file: Path) -> Path:
 
 def _copy_results(
     project_root: Path,
+    results_root: Path,
     result: SearchResult,
     movie_root: Path,
     bme_dir: Path,
     main_audio_out_dir: Path,
     preview_out_dir: Path | None,
+    fully_overwrite: bool = False,
     include_stagefile: bool = True,
     include_bga: bool = True,
     include_preview: bool = True,
 ) -> Path:
-    results_root = project_root / "Results"
+    results_root.mkdir(parents=True, exist_ok=True)
+    if fully_overwrite:
+        id_prefix = f"{result.song_id_display} -"
+        for existing in results_root.iterdir():
+            if not existing.is_dir():
+                continue
+            if existing.name.startswith(id_prefix):
+                shutil.rmtree(existing, ignore_errors=True)
     song_meta = _resolve_song_meta(result, project_root)
     title_attr = getattr(result, "title", None)
     if title_attr is None:
@@ -509,68 +530,76 @@ def convert_chart(
     sound_root: Path,
     movie_root: Path,
     project_root: Path,
+    results_root: Path,
+    fully_overwrite: bool = False,
     include_stagefile: bool = True,
     include_bga: bool = True,
     include_preview: bool = True,
 ) -> Path:
     source_kind, source_files = _find_chart_source(sound_root, result.song_id_display)
-    temp_root = Path(tempfile.mkdtemp(prefix=f"iidx2bms_{result.song_id_display}_"))
+    temp_root = Path(tempfile.mkdtemp(prefix=f"{_TEMP_DIR_PREFIX}{result.song_id_display}_"))
     work_dir = temp_root / result.song_id_display
     work_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if source_kind == "standard":
+            copied = _copy_chart_files(source_files, work_dir)
+            bme_dir = _run_one2bme(project_root, work_dir, copied["one"])
+            if include_preview:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    main_future = executor.submit(
+                        _extract_wavs_from_s3p, project_root, work_dir, copied["audio"]
+                    )
+                    preview_future = executor.submit(
+                        _extract_wavs_from_2dx, project_root, work_dir, copied["preview"]
+                    )
+                    main_audio_out_dir = main_future.result()
+                    preview_out_dir = preview_future.result()
+            else:
+                main_audio_out_dir = _extract_wavs_from_s3p(project_root, work_dir, copied["audio"])
+                preview_out_dir = None
+            return _copy_results(
+                project_root,
+                results_root,
+                result,
+                movie_root,
+                bme_dir,
+                main_audio_out_dir,
+                preview_out_dir,
+                fully_overwrite=fully_overwrite,
+                include_stagefile=include_stagefile,
+                include_bga=include_bga,
+                include_preview=include_preview,
+            )
 
-    if source_kind == "standard":
-        copied = _copy_chart_files(source_files, work_dir)
+        copied = _prepare_from_ifs(project_root, work_dir, result.song_id_display, source_files["ifs"])
         bme_dir = _run_one2bme(project_root, work_dir, copied["one"])
         if include_preview:
             with ThreadPoolExecutor(max_workers=2) as executor:
-                main_future = executor.submit(
-                    _extract_wavs_from_s3p, project_root, work_dir, copied["audio"]
-                )
-                preview_future = executor.submit(
-                    _extract_wavs_from_2dx, project_root, work_dir, copied["preview"]
-                )
+                if copied["audio"].suffix.lower() == ".s3p":
+                    main_future = executor.submit(_extract_wavs_from_s3p, project_root, work_dir, copied["audio"])
+                else:
+                    main_future = executor.submit(_extract_wavs_from_2dx, project_root, work_dir, copied["audio"])
+                preview_future = executor.submit(_extract_wavs_from_2dx, project_root, work_dir, copied["preview"])
                 main_audio_out_dir = main_future.result()
                 preview_out_dir = preview_future.result()
         else:
-            main_audio_out_dir = _extract_wavs_from_s3p(project_root, work_dir, copied["audio"])
+            if copied["audio"].suffix.lower() == ".s3p":
+                main_audio_out_dir = _extract_wavs_from_s3p(project_root, work_dir, copied["audio"])
+            else:
+                main_audio_out_dir = _extract_wavs_from_2dx(project_root, work_dir, copied["audio"])
             preview_out_dir = None
         return _copy_results(
             project_root,
+            results_root,
             result,
             movie_root,
             bme_dir,
             main_audio_out_dir,
             preview_out_dir,
+            fully_overwrite=fully_overwrite,
             include_stagefile=include_stagefile,
             include_bga=include_bga,
             include_preview=include_preview,
         )
-
-    copied = _prepare_from_ifs(project_root, work_dir, result.song_id_display, source_files["ifs"])
-    bme_dir = _run_one2bme(project_root, work_dir, copied["one"])
-    if include_preview:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            if copied["audio"].suffix.lower() == ".s3p":
-                main_future = executor.submit(_extract_wavs_from_s3p, project_root, work_dir, copied["audio"])
-            else:
-                main_future = executor.submit(_extract_wavs_from_2dx, project_root, work_dir, copied["audio"])
-            preview_future = executor.submit(_extract_wavs_from_2dx, project_root, work_dir, copied["preview"])
-            main_audio_out_dir = main_future.result()
-            preview_out_dir = preview_future.result()
-    else:
-        if copied["audio"].suffix.lower() == ".s3p":
-            main_audio_out_dir = _extract_wavs_from_s3p(project_root, work_dir, copied["audio"])
-        else:
-            main_audio_out_dir = _extract_wavs_from_2dx(project_root, work_dir, copied["audio"])
-        preview_out_dir = None
-    return _copy_results(
-        project_root,
-        result,
-        movie_root,
-        bme_dir,
-        main_audio_out_dir,
-        preview_out_dir,
-        include_stagefile=include_stagefile,
-        include_bga=include_bga,
-        include_preview=include_preview,
-    )
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)

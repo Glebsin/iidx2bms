@@ -5,10 +5,11 @@ from urllib.parse import quote
 from ctypes import wintypes
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QGuiApplication, QPalette
+from PyQt6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication
 
 from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
+from conversion.conversion import cleanup_temp_workdirs
 
 
 if sys.platform == "win32":
@@ -37,6 +38,7 @@ def _accent_selection_rgba() -> str:
 
 
 def main() -> None:
+    cleanup_temp_workdirs()
     app = QApplication(sys.argv)
     app.setStyle(InstantTooltipStyle("Fusion"))
     app.setEffectEnabled(Qt.UIEffect.UI_FadeTooltip, False)
@@ -48,6 +50,7 @@ def main() -> None:
     app.setFont(font)
 
     assets_dir = Path(__file__).resolve().parent / "gui" / "assets"
+    app_icon = QIcon(str((Path(__file__).resolve().parent / "icon" / "iidx2bms_logo.ico")))
     scroll_up_icon = quote((assets_dir / "scroll_up.svg").as_posix(), safe="/:")
     scroll_down_icon = quote((assets_dir / "scroll_down.svg").as_posix(), safe="/:")
     check_icon = quote((assets_dir / "check.svg").as_posix(), safe="/:")
@@ -60,9 +63,15 @@ def main() -> None:
         .replace("__ACCENT_BG__", accent_bg)
     )
 
+    app.setWindowIcon(app_icon)
     window = MainWindow()
+    window.setWindowIcon(app_icon)
     window.show()
-    sys.exit(app.exec())
+    try:
+        exit_code = app.exec()
+    finally:
+        cleanup_temp_workdirs()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import sys
 import ctypes
 import os
 import re
+import html
 from dataclasses import replace
 from pathlib import Path
 from ctypes import wintypes
@@ -46,7 +47,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from search_engine.search_engine import SearchEngine, SearchResult
-from conversion_pipeline import convert_chart
+from conversion.conversion import convert_chart
 from PyQt6.QtCore import QUrl
 
 
@@ -199,6 +200,7 @@ QPushButton#HeaderTextButton {
     color: #f0f0f0;
     min-height: 22px;
     max-height: 22px;
+    margin-top: 1px;
     padding: 0 8px;
     text-align: center;
 }
@@ -664,7 +666,13 @@ class ConfirmPopup(QFrame):
 
 
 class FilePathsDialog(QDialog):
-    def __init__(self, sound_path: str, movie_path: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        sound_path: str,
+        movie_path: str,
+        results_path: str,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("FilePathsDialog")
         self.setWindowTitle("File paths")
@@ -713,6 +721,22 @@ class FilePathsDialog(QDialog):
         movie_row_layout.addWidget(self.movie_input, 1)
         movie_row_layout.addWidget(movie_browse)
 
+        results_row = QWidget()
+        results_row_layout = QHBoxLayout(results_row)
+        results_row_layout.setContentsMargins(0, 0, 0, 0)
+        results_row_layout.setSpacing(8)
+        results_label = QLabel("Output folder")
+        results_label.setObjectName("FilePathsLabel")
+        results_label.setFixedWidth(140)
+        self.results_input = QLineEdit(results_path)
+        self.results_input.setObjectName("FilePathsInput")
+        results_browse = QPushButton("...")
+        results_browse.setObjectName("FilePathsBrowseButton")
+        results_browse.clicked.connect(lambda: self._pick_folder(self.results_input))
+        results_row_layout.addWidget(results_label)
+        results_row_layout.addWidget(self.results_input, 1)
+        results_row_layout.addWidget(results_browse)
+
         buttons_row = QWidget()
         buttons_layout = QHBoxLayout(buttons_row)
         buttons_layout.setContentsMargins(0, 6, 0, 0)
@@ -729,6 +753,7 @@ class FilePathsDialog(QDialog):
 
         root_layout.addWidget(sound_row)
         root_layout.addWidget(movie_row)
+        root_layout.addWidget(results_row)
         root_layout.addWidget(buttons_row)
         self.setFixedWidth(660)
 
@@ -1184,6 +1209,8 @@ class ConversionWorker(QRunnable):
         sound_root: Path,
         movie_root: Path,
         project_root: Path,
+        results_root: Path,
+        fully_overwrite: bool,
         include_stagefile: bool,
         include_bga: bool,
         include_preview: bool,
@@ -1193,6 +1220,8 @@ class ConversionWorker(QRunnable):
         self.sound_root = sound_root
         self.movie_root = movie_root
         self.project_root = project_root
+        self.results_root = results_root
+        self.fully_overwrite = fully_overwrite
         self.include_stagefile = include_stagefile
         self.include_bga = include_bga
         self.include_preview = include_preview
@@ -1208,6 +1237,8 @@ class ConversionWorker(QRunnable):
                     self.sound_root,
                     self.movie_root,
                     self.project_root,
+                    self.results_root,
+                    fully_overwrite=self.fully_overwrite,
                     include_stagefile=self.include_stagefile,
                     include_bga=self.include_bga,
                     include_preview=self.include_preview,
@@ -1229,7 +1260,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("iidx2bms")
         self.resize(980, 620)
-        self.setMinimumSize(1100, 400)
+        self._hard_min_width = 1100
+        self._hard_min_height = 620
+        self.setMinimumSize(self._hard_min_width, self._hard_min_height)
         self._active_popup: MiniPopup | None = None
         self._active_popup_button: QToolButton | None = None
         self._search_input: SearchLineEdit | None = None
@@ -1298,11 +1331,15 @@ class MainWindow(QMainWindow):
         self._always_skip_chart_names_editing = bool(
             self._settings.value("conversion/always_skip_chart_names_editing", False, bool)
         )
+        self._fully_overwrite_results = bool(
+            self._settings.value("conversion/fully_overwrite_results", False, bool)
+        )
         self._parallel_converting = bool(
             self._settings.value("conversion/parallel_converting", True, bool)
         )
         self._sound_path = str(self._settings.value("paths/sound", "", str) or "")
         self._movie_path = str(self._settings.value("paths/movie", "", str) or "")
+        self._output_base_path = self._load_output_base_path()
         self._search_request_id = 0
         self._search_limit = 120
         data_path = Path(__file__).resolve().parent.parent / "music_data" / "music_data.json"
@@ -1315,6 +1352,29 @@ class MainWindow(QMainWindow):
         self._conversion_pool = QThreadPool(self)
         self._conversion_pool.setMaxThreadCount(1)
         self._build_ui()
+
+    def _screen_can_fit_hard_min_size(self) -> bool:
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return True
+        available = screen.availableGeometry()
+        return (
+            available.width() >= self._hard_min_width
+            and available.height() >= self._hard_min_height
+        )
+
+    def _restore_from_invalid_maximize(self) -> None:
+        if not self.isMaximized():
+            return
+        self.showNormal()
+        self.resize(self._hard_min_width, self._hard_min_height)
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() != QEvent.Type.WindowStateChange:
+            return
+        if self.isMaximized() and not self._screen_can_fit_hard_min_size():
+            QTimer.singleShot(0, self._restore_from_invalid_maximize)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -1881,6 +1941,7 @@ class MainWindow(QMainWindow):
     def _settings_menu_items(self) -> list[tuple[str, str | None]]:
         return [
             ("File paths", "action:file_paths"),
+            ("Fully overwrite existing folders", "action:toggle_fully_overwrite_results"),
             ("Always skip chart editing", "action:toggle_always_skip_chart_names_editing"),
             ("Parallel converting", "action:toggle_parallel_converting"),
             ("Show chart difficulty", "action:toggle_chart_difficulty"),
@@ -1891,6 +1952,8 @@ class MainWindow(QMainWindow):
     def _on_popup_action(self, action: str) -> None:
         if action == "file_paths":
             self._open_file_paths_dialog()
+        elif action == "toggle_fully_overwrite_results":
+            self._toggle_fully_overwrite_results()
         elif action == "toggle_always_skip_chart_names_editing":
             self._toggle_always_skip_chart_names_editing()
         elif action == "toggle_parallel_converting":
@@ -1911,21 +1974,49 @@ class MainWindow(QMainWindow):
             return self._show_chart_genre
         if action == "toggle_parallel_converting":
             return self._parallel_converting
+        if action == "toggle_fully_overwrite_results":
+            return self._fully_overwrite_results
         if action == "toggle_always_skip_chart_names_editing":
             return self._always_skip_chart_names_editing
         return False
 
     def _open_file_paths_dialog(self) -> None:
-        dialog = FilePathsDialog(self._sound_path, self._movie_path, self)
+        dialog = FilePathsDialog(self._sound_path, self._movie_path, self._output_base_path, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._sound_path = dialog.sound_input.text().strip()
             self._movie_path = dialog.movie_input.text().strip()
+            output_base_text = dialog.results_input.text().strip()
+            if output_base_text:
+                self._output_base_path = str(Path(output_base_text).expanduser())
+            else:
+                self._output_base_path = str(self._default_output_base_path())
             self._settings.setValue("paths/sound", self._sound_path)
             self._settings.setValue("paths/movie", self._movie_path)
+            self._settings.setValue("paths/output_base", self._output_base_path)
             self._settings.sync()
 
     def _project_root(self) -> Path:
         return Path(__file__).resolve().parent.parent
+
+    def _default_output_base_path(self) -> Path:
+        if getattr(sys, "frozen", False):
+            executable = getattr(sys, "executable", "")
+            if executable:
+                return Path(executable).resolve().parent
+        return self._project_root()
+
+    def _load_output_base_path(self) -> str:
+        default_path = str(self._default_output_base_path())
+        if self._settings.contains("paths/output_base"):
+            value = str(self._settings.value("paths/output_base", default_path, str) or "").strip()
+            return value or default_path
+        legacy_value = str(self._settings.value("paths/results", "", str) or "").strip()
+        if legacy_value:
+            legacy_path = Path(legacy_value).expanduser()
+            if legacy_path.name.lower() == "results":
+                return str(legacy_path.parent)
+            return str(legacy_path)
+        return default_path
 
     def _selected_results_data(self) -> list[SearchResult]:
         selected: list[SearchResult] = []
@@ -2004,8 +2095,16 @@ class MainWindow(QMainWindow):
             return
         warning_single = self._chart_editing_warning_message(1)
         warning_multi = self._chart_editing_warning_message(2)
+        finish_editing_first = (
+            'Finish chart editing first (use "Apply and continue conversion" button '
+            'or "Skip editing and continue conversion" button).'
+        )
         lines = self._conversion_logs_results.toPlainText().splitlines()
-        kept_lines = [line for line in lines if line not in {warning_single, warning_multi}]
+        kept_lines = [
+            line
+            for line in lines
+            if line not in {warning_single, warning_multi, finish_editing_first}
+        ]
         self._conversion_logs_results.clear()
         for line in kept_lines:
             self._append_conversion_log(line, error=False)
@@ -2204,6 +2303,14 @@ class MainWindow(QMainWindow):
             second_line_layout.addWidget(game_label, 0, Qt.AlignmentFlag.AlignVCenter)
         left_layout.addWidget(second_line)
 
+        def _show_from_start(edit: QLineEdit) -> None:
+            edit.setCursorPosition(0)
+            edit.deselect()
+
+        for edit in (artist_input, title_input, genre_input):
+            _show_from_start(edit)
+            QTimer.singleShot(0, lambda e=edit: _show_from_start(e))
+
         def _select_editing_item() -> None:
             self._focus_chart_editing_song(result.song_id)
 
@@ -2333,19 +2440,33 @@ class MainWindow(QMainWindow):
         resolved_charts: list[SearchResult] = []
         for chart in charts:
             resolved_charts.append(self._apply_chart_name_override(chart))
+        charts_to_convert, fully_overwrite = self._resolve_overwrite_policy(
+            resolved_charts,
+            context["results_root"],
+        )
+        if not charts_to_convert:
+            self._awaiting_chart_editing_action = False
+            self._pending_conversion_context = None
+            self._set_chart_editing_attention(False)
+            self._clear_chart_editing_warning_logs()
+            self._refresh_chart_editing_header_controls()
+            print("[Start conversion] No charts left to convert")
+            return
 
         self._awaiting_chart_editing_action = False
         self._pending_conversion_context = None
         self._set_chart_editing_attention(False)
         self._clear_chart_editing_warning_logs()
         self._refresh_chart_editing_header_controls()
-        edited_count = self._edited_charts_count(resolved_charts)
+        edited_count = self._edited_charts_count(charts_to_convert)
         self._clear_selected_charts_after_start()
         self._begin_conversion(
-            resolved_charts,
+            charts_to_convert,
             context["sound_root"],
             context["movie_root"],
             context["project_root"],
+            context["results_root"],
+            fully_overwrite,
             context["include_stagefile"],
             context["include_bga"],
             context["include_preview"],
@@ -2359,6 +2480,8 @@ class MainWindow(QMainWindow):
         sound_root: Path,
         movie_root: Path,
         project_root: Path,
+        results_root: Path,
+        fully_overwrite: bool,
         include_stagefile: bool,
         include_bga: bool,
         include_preview: bool,
@@ -2385,6 +2508,8 @@ class MainWindow(QMainWindow):
                 sound_root,
                 movie_root,
                 project_root,
+                results_root,
+                fully_overwrite,
                 include_stagefile,
                 include_bga,
                 include_preview,
@@ -2393,6 +2518,50 @@ class MainWindow(QMainWindow):
             worker.signals.finished.connect(self._on_conversion_worker_finished)
             self._active_conversion_workers.append(worker)
             self._conversion_pool.start(worker)
+
+    def _existing_result_song_ids(self, results_root: Path) -> set[str]:
+        ids: set[str] = set()
+        if not results_root.is_dir():
+            return ids
+        for entry in results_root.iterdir():
+            if not entry.is_dir():
+                continue
+            name = entry.name.strip()
+            if " -" not in name:
+                continue
+            prefix = name.split(" -", 1)[0].strip()
+            if re.fullmatch(r"\d{5}", prefix):
+                ids.add(prefix)
+        return ids
+
+    def _resolve_overwrite_policy(
+        self, charts: list[SearchResult], results_root: Path
+    ) -> tuple[list[SearchResult], bool]:
+        if not charts:
+            return [], False
+        if self._fully_overwrite_results:
+            return list(charts), True
+
+        existing_song_ids = self._existing_result_song_ids(results_root)
+        conflicting_song_ids = {chart.song_id_display for chart in charts if chart.song_id_display in existing_song_ids}
+        if not conflicting_song_ids:
+            return list(charts), False
+
+        question = (
+            "Some chart folders already exist in Results.\n"
+            "Overwrite all matching chart folders by song ID?"
+        )
+        if self._confirm_action(question):
+            return list(charts), True
+
+        filtered = [chart for chart in charts if chart.song_id_display not in conflicting_song_ids]
+        skipped = len(charts) - len(filtered)
+        if skipped > 0:
+            self._append_conversion_log(
+                f"Skipped existing charts: {skipped} (overwrite declined).",
+                error=True,
+            )
+        return filtered, False
 
     def _on_start_conversion(self) -> None:
         if self._conversion_active:
@@ -2417,6 +2586,16 @@ class MainWindow(QMainWindow):
         if not movie_path or not movie_root.is_dir():
             print("[Start conversion] Movie path is not set or does not exist")
             return
+        output_base_path = self._output_base_path.strip()
+        output_base_root = (
+            Path(output_base_path).expanduser()
+            if output_base_path
+            else self._default_output_base_path()
+        )
+        if output_base_root.exists() and not output_base_root.is_dir():
+            print("[Start conversion] Output folder path exists and is not a folder")
+            return
+        results_root = output_base_root / "Results"
 
         if self._conversion_logs_results is not None:
             self._conversion_logs_results.clear()
@@ -2447,6 +2626,8 @@ class MainWindow(QMainWindow):
             "sound_root": sound_root,
             "movie_root": movie_root,
             "project_root": project_root,
+            "results_root": results_root,
+            "fully_overwrite": self._fully_overwrite_results,
             "include_stagefile": include_stagefile,
             "include_bga": include_bga,
             "include_preview": include_preview,
@@ -2466,13 +2647,19 @@ class MainWindow(QMainWindow):
         self._set_chart_editing_attention(False)
         self._refresh_chart_editing_header_controls()
         self._pending_conversion_context = None
-        edited_count = self._edited_charts_count(charts)
+        charts_to_convert, fully_overwrite = self._resolve_overwrite_policy(charts, results_root)
+        if not charts_to_convert:
+            print("[Start conversion] No charts left to convert")
+            return
+        edited_count = self._edited_charts_count(charts_to_convert)
         self._clear_selected_charts_after_start()
         self._begin_conversion(
-            list(charts),
+            list(charts_to_convert),
             sound_root,
             movie_root,
             project_root,
+            results_root,
+            fully_overwrite,
             include_stagefile,
             include_bga,
             include_preview,
@@ -2531,7 +2718,22 @@ class MainWindow(QMainWindow):
         self._settings.setValue("conversion/parallel_converting", self._parallel_converting)
         self._settings.sync()
 
+    def _toggle_fully_overwrite_results(self) -> None:
+        self._fully_overwrite_results = not self._fully_overwrite_results
+        self._settings.setValue("conversion/fully_overwrite_results", self._fully_overwrite_results)
+        self._settings.sync()
+
     def _toggle_always_skip_chart_names_editing(self) -> None:
+        if self._awaiting_chart_editing_action:
+            self._append_conversion_log(
+                'Finish chart editing first (use "Apply and continue conversion" button '
+                'or "Skip editing and continue conversion" button).',
+                error=True,
+            )
+            self._set_chart_editing_attention(True)
+            QTimer.singleShot(0, lambda: self._set_chart_editing_attention(True))
+            return
+
         enable_option = not self._always_skip_chart_names_editing
         if not enable_option:
             self._always_skip_chart_names_editing = False
@@ -2559,7 +2761,8 @@ class MainWindow(QMainWindow):
             self._refresh_selected_result_widgets()
         self._awaiting_chart_editing_action = False
         self._pending_conversion_context = None
-        self._set_chart_editing_attention(False)
+        if not has_edits:
+            self._set_chart_editing_attention(False)
         self._clear_chart_editing_warning_logs()
         self._always_skip_chart_names_editing = True
         self._settings.setValue("conversion/always_skip_chart_names_editing", True)
@@ -2614,15 +2817,30 @@ class MainWindow(QMainWindow):
         cursor = self._conversion_logs_results.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self._conversion_logs_results.setTextCursor(cursor)
-        fmt = cursor.charFormat()
-        fmt.setForeground(QColor("#be0420") if error else QColor("#f0f0f0"))
-        cursor.setCharFormat(fmt)
-        cursor.insertText(rendered + "\n")
+        finished_match = re.match(r"^Finished\. Success:\s*(\d+),\s*Failed:\s*(\d+)\s*$", rendered)
+        if finished_match and not error:
+            success_count, failed_count = finished_match.groups()
+            cursor.insertHtml(
+                "Finished. Success: "
+                f'<span style="color:#00e37f;">{html.escape(success_count)}</span>, '
+                "Failed: "
+                f'<span style="color:#be0420;">{html.escape(failed_count)}</span>'
+            )
+        else:
+            line_color = "#be0420" if (error or rendered.startswith("Failed:")) else "#f0f0f0"
+            cursor.insertHtml(f'<span style="color:{line_color};">{html.escape(rendered)}</span>')
+        cursor.insertBlock()
         self._conversion_logs_results.setTextCursor(cursor)
         self._conversion_logs_results.ensureCursorVisible()
 
     def _open_results_folder(self) -> None:
-        results_dir = (self._project_root() / "Results").resolve()
+        output_base_path = self._output_base_path.strip()
+        output_base_root = (
+            Path(output_base_path).expanduser()
+            if output_base_path
+            else self._default_output_base_path()
+        )
+        results_dir = (output_base_root / "Results").resolve()
         results_dir.mkdir(parents=True, exist_ok=True)
         try:
             if sys.platform == "win32":
