@@ -31,6 +31,6 @@
 6. Follow instructions in console
 7. Get result in "result" folder
 
-**Tested on Windows 11, ffmpeg and Python 3.14.2 should be installed and added to PATH, 1 chart per script launch, probably doesn't work with omnimix charts.**
+**Tested on Windows 11, ffmpeg and Python 3.14.2 should be installed and added to PATH, 1 chart per script launch, doesn't work with omnimix charts.**
 
 **Converted charts tested only in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream) and probably working only there (or in common beatoraja too idk)**
