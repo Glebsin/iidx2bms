@@ -15,7 +15,7 @@
 5. Select charts by double-clicking or pressing enter
 6. Click `Start conversion` button
 7. Solve problems in `Chart editing` panel if chart has non-standard symbols in artist name, title or genre
-8. Solve problems `Chart editing` panel if difficulty not found for .bme files
+8. Solve problems in `Chart editing` panel if difficulty not found for .bme files
 9. Get result in `Result` folder
 
 **Tested on Windows 11, doesn't work with omnimix charts, doesn't work with charts that have more than one .2dx file, not counting _pre.2dx**
