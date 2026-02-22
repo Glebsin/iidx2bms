@@ -23,7 +23,7 @@
 
 python -m pip install --upgrade pip && python -m pip install PyQt6 ifstools pyinstaller
 
-python -m PyInstaller --noconfirm --clean --windowed --onefile --name iidx2bms --icon icon\iidx2bms_logo.ico --hidden-import PyQt6.QtSvg --add-data "gui\assets;gui\assets" --add-data "icon;icon" --add-data "music_data;music_data" --add-data "stagefiles;stagefiles" --add-data "one2bme;one2bme" --add-data "2dx_extract;2dx_extract" --add-data "s3p_extract;s3p_extract" --add-data "ifs_unpack;ifs_unpack" main.py
+python -m PyInstaller --noconfirm --clean --windowed --onefile --name iidx2bms --icon icon\iidx2bms_logo.ico --hidden-import PyQt6.QtSvg --hidden-import ifstools.ifs --add-data "gui\assets;gui\assets" --add-data "icon;icon" --add-data "music_data;music_data" --add-data "stagefiles;stagefiles" --add-data "one2bme;one2bme" main.py
 
 
 # HOW TO USE (for 2026.207.0 release)
