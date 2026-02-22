@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import mmap
+import os
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import time
 from pathlib import Path
 
+from ifstools.ifs import IFS
 from search_engine.search_engine import SearchResult
 
 
@@ -70,52 +74,6 @@ def _run_external_command(
     return completed.returncode, output
 
 
-def _python_script_launchers() -> list[list[str]]:
-    if not getattr(sys, "frozen", False):
-        return [[sys.executable]]
-
-    launchers: list[list[str]] = []
-    base_executable = str(getattr(sys, "_base_executable", "") or "").strip()
-    if base_executable:
-        base_path = Path(base_executable)
-        if base_path.name.lower().startswith("python"):
-            launchers.append([str(base_path)])
-
-    py_launcher = shutil.which("py")
-    if py_launcher:
-        launchers.append([py_launcher, "-3"])
-
-    python_launcher = shutil.which("python")
-    if python_launcher:
-        launchers.append([python_launcher])
-
-    return launchers
-
-
-def _run_python_script(script_path: Path, args: list[Path | str], working_directory: Path) -> None:
-    launchers = _python_script_launchers()
-    if not launchers:
-        raise RuntimeError(
-            "No Python launcher found for running helper scripts in onefile build. "
-            "Install Python launcher (`py`) or Python runtime."
-        )
-
-    attempts: list[str] = []
-    argv = [str(script_path), *[str(value) for value in args]]
-    for launcher in launchers:
-        code, output = _run_external_command(
-            [*launcher, *argv],
-            working_directory,
-            raise_on_error=False,
-        )
-        if code == 0:
-            return
-        tail = " | ".join((output or "").strip().splitlines()[-3:])
-        attempts.append(f"cmd={' '.join([*launcher, *argv])} code={code} out={tail}")
-
-    raise RuntimeError("Helper script failed:\n" + "\n".join(attempts))
-
-
 def _find_chart_source(sound_root: Path, song_id_display: str) -> tuple[str, dict[str, Path]]:
     base_dirs = [sound_root / song_id_display, sound_root]
     for base_dir in base_dirs:
@@ -155,9 +113,18 @@ def _prepare_from_ifs(
     ifs_file: Path,
 ) -> dict[str, Path]:
     copied_ifs = _copy_chart_files({"ifs": ifs_file}, work_dir)["ifs"]
-    ifs_unpack_script = project_root / "ifs_unpack" / "ifs_unpack.py"
     out_dir = work_dir / f"{song_id_display}_ifs"
-    _run_python_script(ifs_unpack_script, [copied_ifs, "-o", out_dir], work_dir)
+    archive = IFS(str(copied_ifs))
+    try:
+        archive.extract(
+            path=str(out_dir),
+            progress=False,
+            recurse=True,
+            extract_manifest=False,
+            rename_dupes=True,
+        )
+    finally:
+        archive.close()
 
     extracted_chart_dir = out_dir / song_id_display
     if not extracted_chart_dir.is_dir():
@@ -197,19 +164,94 @@ def _prepare_from_ifs(
 
 
 def _extract_wavs_from_2dx(project_root: Path, work_dir: Path, archive_path: Path) -> Path:
-    script_path = project_root / "2dx_extract" / "2dx_extract.py"
-    _run_python_script(script_path, [archive_path], work_dir)
     out_dir = work_dir / f"{archive_path.name}.out"
-    if not out_dir.is_dir():
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    magic = b"2DX9"
+    keysound_count_offset = 0x14
+    file_size_offset = 0x08
+    data_offset = 0x18
+    min_filename_digits = 4
+
+    with archive_path.open("rb") as fp:
+        with mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ) as arc:
+            fsize = arc.size()
+            keysound_num = 0
+            if fsize >= keysound_count_offset + 2:
+                keysound_num = int.from_bytes(
+                    arc[keysound_count_offset : keysound_count_offset + 2],
+                    byteorder="little",
+                    signed=False,
+                )
+
+            exports: list[tuple[int, int]] = []
+            i = 0
+            while i < fsize:
+                pos = arc.find(magic, i)
+                if pos < 0:
+                    break
+                size_pos = pos + file_size_offset
+                wav_data_pos = pos + data_offset
+                if size_pos + 4 > fsize or wav_data_pos > fsize:
+                    break
+                wav_fsize = int.from_bytes(arc[size_pos : size_pos + 4], "little", signed=False)
+                wav_end = wav_data_pos + wav_fsize
+                if wav_end > fsize:
+                    break
+                exports.append((wav_data_pos, wav_fsize))
+                i = wav_end
+
+            count_for_padding = max(len(exports), keysound_num, 1)
+            digits = max(min_filename_digits, len(str(count_for_padding)))
+            for idx, (pos, wav_size) in enumerate(exports, start=1):
+                out_name = f"{idx:0{digits}d}.wav"
+                with open(out_dir / out_name, "wb") as out_fp:
+                    out_fp.write(arc[pos : pos + wav_size])
+
+    if not any(out_dir.glob("*.wav")):
         raise RuntimeError(f"2DX output folder not found: {out_dir}")
     return out_dir
 
 
 def _extract_wavs_from_s3p(project_root: Path, work_dir: Path, archive_path: Path) -> Path:
-    script_path = project_root / "s3p_extract" / "s3p_extract.py"
-    _run_python_script(script_path, [archive_path], work_dir)
     out_dir = work_dir / f"{archive_path.name}.out"
-    if not out_dir.is_dir():
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    s3p_magic = b"S3P0"
+    s3v_magic = b"S3V0"
+    header_struct = struct.Struct("<4sI")
+    entry_struct = struct.Struct("<II")
+    s3v0_struct = struct.Struct("<4sII20s")
+
+    with archive_path.open("rb") as file_obj:
+        with mmap.mmap(file_obj.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            if len(mm) < header_struct.size:
+                raise RuntimeError(f"S3P output folder not found: {out_dir}")
+
+            magic, entries_count = header_struct.unpack_from(mm, 0)
+            if magic != s3p_magic:
+                raise RuntimeError(f"S3P output folder not found: {out_dir}")
+
+            entries_table_end = header_struct.size + entries_count * entry_struct.size
+            if entries_table_end > len(mm):
+                raise RuntimeError(f"S3P output folder not found: {out_dir}")
+
+            entries_region = mm[header_struct.size:entries_table_end]
+            for index, (offset, length) in enumerate(entry_struct.iter_unpack(entries_region), start=1):
+                if offset < 0 or length < s3v0_struct.size or offset + length > len(mm):
+                    continue
+                magic_s3v, file_start, _payload_len, _unknown = s3v0_struct.unpack_from(mm, offset)
+                if magic_s3v != s3v_magic:
+                    continue
+                data_start = offset + file_start
+                data_end = offset + length
+                if data_start > data_end:
+                    continue
+                out_name = f"{index:04d}.wav"
+                with (out_dir / out_name).open("wb", buffering=4 * 1024 * 1024) as wf:
+                    wf.write(mm[data_start:data_end])
+
+    if not any(out_dir.glob("*.wav")):
         raise RuntimeError(f"S3P output folder not found: {out_dir}")
     return out_dir
 
@@ -298,11 +340,12 @@ def _copy_results(
 ) -> Path:
     results_root.mkdir(parents=True, exist_ok=True)
     if fully_overwrite:
-        id_prefix = f"{result.song_id_display} -"
+        id_prefix_new = f"{result.song_id_display} "
+        id_prefix_old = f"{result.song_id_display} -"
         for existing in results_root.iterdir():
             if not existing.is_dir():
                 continue
-            if existing.name.startswith(id_prefix):
+            if existing.name.startswith(id_prefix_new) or existing.name.startswith(id_prefix_old):
                 shutil.rmtree(existing, ignore_errors=True)
     song_meta = _resolve_song_meta(result, project_root)
     title_attr = getattr(result, "title", None)
@@ -311,7 +354,7 @@ def _copy_results(
     else:
         title = str(title_attr).strip()
     sanitized_title = _sanitize_result_folder_name(title)
-    folder_name = f"{result.song_id_display} - {sanitized_title}" if sanitized_title else f"{result.song_id_display} -"
+    folder_name = f"{result.song_id_display} {sanitized_title}" if sanitized_title else f"{result.song_id_display}"
     result_dir = results_root / folder_name
     result_dir.mkdir(parents=True, exist_ok=True)
     game_version = _resolve_game_version(result, project_root)
@@ -423,6 +466,10 @@ def _set_bme_difficulty(path: Path, difficulty: int | None) -> None:
     path.write_text("".join(filtered_lines), encoding=encoding)
 
 
+def set_bme_playlevel(path: Path, difficulty: int) -> None:
+    _set_bme_difficulty(path, int(difficulty))
+
+
 def _set_bme_stagefile(path: Path, stagefile_name: str) -> None:
     raw_text, encoding = _read_text_with_fallback(path)
     lines = raw_text.splitlines(keepends=True)
@@ -526,10 +573,13 @@ def _movie_file_map(movie_root: Path) -> dict[str, Path]:
     for file_path in movie_root.rglob("*"):
         if not file_path.is_file():
             continue
+        ext = file_path.suffix.lower()
+        if ext not in priorities:
+            continue
         stem = file_path.stem.strip().lower()
         if not stem:
             continue
-        ext_priority = priorities.get(file_path.suffix.lower(), 100)
+        ext_priority = priorities[ext]
         current = chosen_priority.get(stem)
         if current is None or ext_priority < current:
             chosen_priority[stem] = ext_priority

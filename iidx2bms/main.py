@@ -1,5 +1,7 @@
 import sys
 import ctypes
+import os
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 from ctypes import wintypes
@@ -8,7 +10,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication
 
-from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
 from conversion.conversion import cleanup_temp_workdirs
 
 
@@ -37,9 +38,19 @@ def _accent_selection_rgba() -> str:
     return f"rgba({highlight.red()}, {highlight.green()}, {highlight.blue()}, 70)"
 
 
+def _build_app_version() -> str:
+    today = date.today()
+    return f"{today.year}.{today.month}{today.day:02d}.0"
+
+
 def main() -> None:
     cleanup_temp_workdirs()
+    version = _build_app_version()
+    os.environ["IIDX2BMS_VERSION"] = version
+    from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
+
     app = QApplication(sys.argv)
+    app.setApplicationVersion(version)
     app.setStyle(InstantTooltipStyle("Fusion"))
     app.setEffectEnabled(Qt.UIEffect.UI_FadeTooltip, False)
     app.setEffectEnabled(Qt.UIEffect.UI_AnimateTooltip, False)
