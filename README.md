@@ -17,7 +17,7 @@
 7. Solve problems if chart has non-standard symbols in chart name or genre
 8. Get result in `Result` folder
 
-**Tested on Windows 11, doesn't work with omnimix charts, doesn't work with charts that have non xxxxx.2dx files**
+**Tested on Windows 11, doesn't work with omnimix charts, doesn't work with charts that have more than 1 xxxxx.2dx file (not counting _pre.2dx)**
 
 **Converted charts tested only in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream) and probably working only there (or in common beatoraja too idk)**
 
