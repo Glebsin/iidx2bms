@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import io
 import json
-import mmap
 import os
 import re
 import shutil
@@ -17,7 +14,6 @@ from typing import Callable
 
 from ifstools.ifs import IFS
 from search_engine.search_engine import SearchResult
-from s3p_extract.s3p_extract import convert as extract_s3p_archive
 
 
 _BME_REMOVE_PREFIXES = (
@@ -181,47 +177,19 @@ def _prepare_from_ifs(
 def _extract_wavs_from_2dx(project_root: Path, work_dir: Path, archive_path: Path) -> Path:
     out_dir = work_dir / f"{archive_path.name}.out"
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale_file in out_dir.glob("*"):
+        if stale_file.is_file():
+            stale_file.unlink(missing_ok=True)
 
-    magic = b"2DX9"
-    keysound_count_offset = 0x14
-    file_size_offset = 0x08
-    data_offset = 0x18
-    min_filename_digits = 4
+    extract_exe = project_root / "2dx_extract" / "2dx_extract.exe"
+    if not extract_exe.is_file():
+        raise RuntimeError(f"2dx_extract.exe not found: {extract_exe}")
 
-    with archive_path.open("rb") as fp:
-        with mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ) as arc:
-            fsize = arc.size()
-            keysound_num = 0
-            if fsize >= keysound_count_offset + 2:
-                keysound_num = int.from_bytes(
-                    arc[keysound_count_offset : keysound_count_offset + 2],
-                    byteorder="little",
-                    signed=False,
-                )
-
-            exports: list[tuple[int, int]] = []
-            i = 0
-            while i < fsize:
-                pos = arc.find(magic, i)
-                if pos < 0:
-                    break
-                size_pos = pos + file_size_offset
-                wav_data_pos = pos + data_offset
-                if size_pos + 4 > fsize or wav_data_pos > fsize:
-                    break
-                wav_fsize = int.from_bytes(arc[size_pos : size_pos + 4], "little", signed=False)
-                wav_end = wav_data_pos + wav_fsize
-                if wav_end > fsize:
-                    break
-                exports.append((wav_data_pos, wav_fsize))
-                i = wav_end
-
-            count_for_padding = max(len(exports), keysound_num, 1)
-            digits = max(min_filename_digits, len(str(count_for_padding)))
-            for idx, (pos, wav_size) in enumerate(exports, start=1):
-                out_name = f"{idx:0{digits}d}.wav"
-                with open(out_dir / out_name, "wb") as out_fp:
-                    out_fp.write(arc[pos : pos + wav_size])
+    _run_external_command(
+        [str(extract_exe), str(archive_path)],
+        work_dir,
+        timeout_seconds=120.0,
+    )
 
     if not any(out_dir.glob("*.wav")):
         raise RuntimeError(f"2DX output folder not found: {out_dir}")
@@ -240,12 +208,20 @@ def _extract_wavs_from_s3p(
         if stale_file.is_file():
             stale_file.unlink(missing_ok=True)
 
-    with contextlib.redirect_stdout(io.StringIO()):
-        extract_s3p_archive(archive_path)
+    s3p_extract_exe = project_root / "s3p_extract" / "s3p_extract.exe"
+    if not s3p_extract_exe.is_file():
+        raise RuntimeError(f"s3p_extract.exe not found: {s3p_extract_exe}")
+    _run_external_command(
+        [str(s3p_extract_exe), str(archive_path)],
+        work_dir,
+        timeout_seconds=180.0,
+    )
 
-    ffmpeg_path = project_root / "ffmpeg" / "ffmpeg.exe"
-    if not ffmpeg_path.is_file():
-        raise RuntimeError(f"ffmpeg.exe not found: {ffmpeg_path}")
+    produced_wavs = sorted(out_dir.glob("*.wav"))
+    if produced_wavs:
+        if progress_callback is not None:
+            progress_callback(100)
+        return out_dir
 
     wma_files = sorted(out_dir.glob("*.wma"))
     total_wma = len(wma_files)
@@ -253,6 +229,10 @@ def _extract_wavs_from_s3p(
         raise RuntimeError(f"S3P output folder not found: {out_dir}")
     if progress_callback is not None:
         progress_callback(0)
+
+    ffmpeg_path = project_root / "ffmpeg" / "ffmpeg.exe"
+    if not ffmpeg_path.is_file():
+        raise RuntimeError(f"ffmpeg.exe not found: {ffmpeg_path}")
 
     max_workers = max(1, min(total_wma, os.cpu_count() or 1))
 

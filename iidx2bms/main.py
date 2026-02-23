@@ -1,6 +1,5 @@
 import sys
 import ctypes
-import os
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
@@ -46,7 +45,6 @@ def _build_app_version() -> str:
 def main() -> None:
     cleanup_temp_workdirs()
     version = _build_app_version()
-    os.environ["IIDX2BMS_VERSION"] = version
     from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
 
     app = QApplication(sys.argv)
