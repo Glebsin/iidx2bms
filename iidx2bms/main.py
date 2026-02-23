@@ -45,7 +45,7 @@ def _build_app_version() -> str:
 
 def main() -> None:
     cleanup_temp_workdirs()
-    version = os.environ.get("IIDX2BMS_VERSION", "").strip() or _build_app_version()
+    version = _build_app_version()
     os.environ["IIDX2BMS_VERSION"] = version
     from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
 
