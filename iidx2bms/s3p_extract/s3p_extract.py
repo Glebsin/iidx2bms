@@ -126,14 +126,14 @@ def convert(path: Path) -> None:
 
             for i, (offset, length) in enumerate(ENTRY_STRUCT.iter_unpack(entries_region), start=1):
                 print(f"{(i / entries_count) * 100:.2f}%")
-                out_file = out_dir / f"{i:04d}.wav"
+                out_file = out_dir / f"{i:04d}.wma"
                 _extract_one(mm, offset, length, out_file)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="s3p_extract",
-        description="Extract and repack S3P0 archives (outputs .wav on extract)",
+        description="Extract and repack S3P0 archives (outputs .wma on extract)",
         allow_abbrev=False,
     )
 

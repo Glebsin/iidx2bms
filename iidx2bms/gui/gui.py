@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QDialog,
     QPushButton,
+    QProgressBar,
     QProxyStyle,
     QSizePolicy,
     QStackedWidget,
@@ -353,6 +354,34 @@ QTextEdit#ConversionLogs {
     outline: none;
     selection-background-color: __ACCENT_BG__;
     selection-color: #f0f0f0;
+}
+QListWidget#ConversionProgressList {
+    background: #1e1e1e;
+    border: 1px solid #101010;
+    border-radius: 4px;
+    outline: none;
+}
+QListWidget#ConversionProgressList::item {
+    border: none;
+    padding: 0px;
+}
+QFrame#ConversionProgressItem {
+    background: #1e1e1e;
+    border: none;
+}
+QLabel#ConversionProgressLabel {
+    color: #f0f0f0;
+}
+QProgressBar#ConversionProgressBar {
+    background: #1f1f1f;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    color: #f0f0f0;
+    text-align: center;
+}
+QProgressBar#ConversionProgressBar::chunk {
+    background: #00e37f;
+    border-radius: 3px;
 }
 QListWidget#SearchResults::item {
     border: none;
@@ -1463,6 +1492,21 @@ class ConversionWorker(QRunnable):
         failed = 0
         for result in self.charts:
             try:
+                self.signals.progress.emit(
+                    f"[Start conversion] Start: {result.song_id_display}"
+                )
+                last_percent = -1
+
+                def _on_chart_progress(percent: int, stage: str) -> None:
+                    nonlocal last_percent
+                    bounded = min(100, max(0, int(percent)))
+                    if bounded == last_percent:
+                        return
+                    last_percent = bounded
+                    self.signals.progress.emit(
+                        f"[Start conversion] Progress: {result.song_id_display}|{bounded}|{stage}"
+                    )
+
                 output_dir = convert_chart(
                     result,
                     self.sound_root,
@@ -1473,6 +1517,7 @@ class ConversionWorker(QRunnable):
                     include_stagefile=self.include_stagefile,
                     include_bga=self.include_bga,
                     include_preview=self.include_preview,
+                    progress_callback=_on_chart_progress,
                 )
                 succeeded += 1
                 self.signals.progress.emit(
@@ -1499,6 +1544,8 @@ class MainWindow(QMainWindow):
         self._search_input: SearchLineEdit | None = None
         self._search_results: QListWidget | None = None
         self._conversion_logs_results: QTextEdit | None = None
+        self._conversion_progress_list: QListWidget | None = None
+        self._conversion_progress_bars: dict[str, QProgressBar] = {}
         self._chart_editing_results: QListWidget | None = None
         self._chart_editing_panel: QFrame | None = None
         self._chart_editing_body: QFrame | None = None
@@ -2072,6 +2119,17 @@ class MainWindow(QMainWindow):
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         self._conversion_logs_results = logs_list
+        progress_list = QListWidget()
+        progress_list.setObjectName("ConversionProgressList")
+        progress_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        progress_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        progress_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        progress_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        progress_list.setUniformItemSizes(False)
+        progress_list.setVisible(False)
+        self._conversion_progress_list = progress_list
+        body_layout.addWidget(progress_list, 0)
+        body_layout.addSpacing(8)
         body_layout.addWidget(logs_list, 1)
         body_layout.addSpacing(8)
 
@@ -2529,6 +2587,62 @@ class MainWindow(QMainWindow):
         if not title:
             title = result.title if use_ascii else result.title_ascii
         return f"ID: {result.song_id_display}  {result.artist} - {title}"
+
+    def _conversion_progress_label_text(self, result: SearchResult) -> str:
+        title = result.title_ascii if self._show_ascii_song_title else result.title
+        if not title:
+            title = result.title or result.title_ascii or ""
+        text = f"ID: {result.song_id_display}  {title}"
+        return text if len(text) <= 64 else f"{text[:61]}..."
+
+    def _reset_conversion_progress_rows(self, charts: list[SearchResult]) -> None:
+        if self._conversion_progress_list is None:
+            return
+        self._conversion_progress_list.clear()
+        self._conversion_progress_bars.clear()
+        if not charts:
+            self._conversion_progress_list.setVisible(False)
+            return
+
+        for result in charts:
+            row_widget = QFrame()
+            row_widget.setObjectName("ConversionProgressItem")
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(8, 4, 8, 4)
+            row_layout.setSpacing(8)
+
+            label = QLabel(self._conversion_progress_label_text(result))
+            label.setObjectName("ConversionProgressLabel")
+            label.setToolTip(self._primary_line_text(result, use_ascii=self._show_ascii_song_title))
+            row_layout.addWidget(label, 1)
+
+            progress_bar = QProgressBar()
+            progress_bar.setObjectName("ConversionProgressBar")
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(0)
+            progress_bar.setFormat("0%")
+            progress_bar.setFixedHeight(18)
+            progress_bar.setFixedWidth(130)
+            row_layout.addWidget(progress_bar, 0)
+
+            item = QListWidgetItem()
+            item.setSizeHint(row_widget.sizeHint())
+            self._conversion_progress_list.addItem(item)
+            self._conversion_progress_list.setItemWidget(item, row_widget)
+            self._conversion_progress_bars[result.song_id_display] = progress_bar
+
+        visible_rows = min(max(1, len(charts)), 5)
+        row_height = 30
+        self._conversion_progress_list.setFixedHeight((visible_rows * row_height) + 4)
+        self._conversion_progress_list.setVisible(True)
+
+    def _set_conversion_chart_progress(self, song_id_display: str, percent: int) -> None:
+        progress_bar = self._conversion_progress_bars.get(song_id_display)
+        if progress_bar is None:
+            return
+        bounded = min(100, max(0, int(percent)))
+        progress_bar.setValue(bounded)
+        progress_bar.setFormat(f"{bounded}%")
 
     def _contains_non_standard_symbols(self, text: str) -> bool:
         return re.search(r"[^A-Za-z0-9 \t\-\_\.\,\!\?\:\;\'\"\/\&\+\(\)\[\]]", text) is not None
@@ -3132,6 +3246,7 @@ class MainWindow(QMainWindow):
         self._awaiting_chart_editing_action = False
         self._set_chart_editing_attention(False)
         self._clear_chart_editing_warning_logs()
+        self._reset_conversion_progress_rows([])
         self._update_chart_editing_list()
         self._update_start_conversion_button_state()
 
@@ -3267,6 +3382,7 @@ class MainWindow(QMainWindow):
         self._clear_chart_editing_warning_logs()
         self._conversion_output_dirs.clear()
         self._conversion_chart_by_id_display = {chart.song_id_display: chart for chart in charts}
+        self._reset_conversion_progress_rows(charts)
         stagefile_text = "yes" if include_stagefile else "no"
         bga_text = "yes" if include_bga else "no"
         preview_text = "yes" if include_preview else "no"
@@ -3453,6 +3569,7 @@ class MainWindow(QMainWindow):
 
         if self._conversion_logs_results is not None:
             self._conversion_logs_results.clear()
+        self._reset_conversion_progress_rows([])
         self._show_processing_page()
         flagged_count = self._update_chart_editing_list()
         charts = [
@@ -3541,10 +3658,22 @@ class MainWindow(QMainWindow):
         rendered = message
         if rendered.startswith("[Start conversion] "):
             rendered = rendered[len("[Start conversion] ") :]
+        progress_match = re.match(r"^Progress:\s*(\d{5})\|(\d{1,3})\|(.+)$", rendered)
+        if progress_match:
+            song_id_display, percent_text, _stage = progress_match.groups()
+            self._set_conversion_chart_progress(song_id_display, int(percent_text))
+            return
+        start_match = re.match(r"^Start:\s*(\d{5})\s*$", rendered)
+        if start_match:
+            self._set_conversion_chart_progress(start_match.group(1), 0)
         done_match = re.match(r"^Done:\s*(\d{5})\s*->\s*(.+)\s*$", rendered)
         if done_match:
             song_id_display, output_path = done_match.groups()
             self._conversion_output_dirs[song_id_display] = Path(output_path.strip())
+            self._set_conversion_chart_progress(song_id_display, 100)
+        failed_match = re.match(r"^Failed:\s*(\d{5})\s*:", rendered)
+        if failed_match:
+            self._set_conversion_chart_progress(failed_match.group(1), 100)
         self._append_conversion_log(message)
 
     def _resolve_current_conversion_paths(self) -> tuple[Path, Path, Path, Path] | None:
@@ -4085,6 +4214,7 @@ class MainWindow(QMainWindow):
             self._set_chart_editing_attention(False)
             if self._conversion_logs_results is not None:
                 self._conversion_logs_results.clear()
+            self._reset_conversion_progress_rows([])
         self._update_chart_editing_list()
         self._update_start_conversion_button_state()
 

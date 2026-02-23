@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import contextlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
 import json
 import mmap
 import os
 import re
 import shutil
 import subprocess
-import struct
 import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable
 
 from ifstools.ifs import IFS
 from search_engine.search_engine import SearchResult
+from s3p_extract.s3p_extract import convert as extract_s3p_archive
 
 
 _BME_REMOVE_PREFIXES = (
@@ -54,18 +57,30 @@ def _run_external_command(
     working_directory: Path,
     stdin_data: str | None = None,
     raise_on_error: bool = True,
+    timeout_seconds: float | None = None,
 ) -> tuple[int, str]:
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    completed = subprocess.run(
-        command,
-        cwd=str(working_directory),
-        input=stdin_data,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        creationflags=creation_flags,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(working_directory),
+            input=stdin_data,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=creation_flags,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = (
+            f"{timeout_seconds:.0f}s"
+            if timeout_seconds is not None
+            else "timeout"
+        )
+        raise RuntimeError(
+            f"Command timed out ({timeout_label}): {' '.join(command)}"
+        ) from exc
     output = completed.stdout or ""
     if raise_on_error and completed.returncode != 0:
         raise RuntimeError(
@@ -213,46 +228,77 @@ def _extract_wavs_from_2dx(project_root: Path, work_dir: Path, archive_path: Pat
     return out_dir
 
 
-def _extract_wavs_from_s3p(project_root: Path, work_dir: Path, archive_path: Path) -> Path:
+def _extract_wavs_from_s3p(
+    project_root: Path,
+    work_dir: Path,
+    archive_path: Path,
+    progress_callback: Callable[[int], None] | None = None,
+) -> Path:
     out_dir = work_dir / f"{archive_path.name}.out"
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale_file in out_dir.glob("*"):
+        if stale_file.is_file():
+            stale_file.unlink(missing_ok=True)
 
-    s3p_magic = b"S3P0"
-    s3v_magic = b"S3V0"
-    header_struct = struct.Struct("<4sI")
-    entry_struct = struct.Struct("<II")
-    s3v0_struct = struct.Struct("<4sII20s")
+    with contextlib.redirect_stdout(io.StringIO()):
+        extract_s3p_archive(archive_path)
 
-    with archive_path.open("rb") as file_obj:
-        with mmap.mmap(file_obj.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-            if len(mm) < header_struct.size:
-                raise RuntimeError(f"S3P output folder not found: {out_dir}")
+    ffmpeg_path = project_root / "ffmpeg" / "ffmpeg.exe"
+    if not ffmpeg_path.is_file():
+        raise RuntimeError(f"ffmpeg.exe not found: {ffmpeg_path}")
 
-            magic, entries_count = header_struct.unpack_from(mm, 0)
-            if magic != s3p_magic:
-                raise RuntimeError(f"S3P output folder not found: {out_dir}")
+    wma_files = sorted(out_dir.glob("*.wma"))
+    total_wma = len(wma_files)
+    if total_wma == 0:
+        raise RuntimeError(f"S3P output folder not found: {out_dir}")
+    if progress_callback is not None:
+        progress_callback(0)
 
-            entries_table_end = header_struct.size + entries_count * entry_struct.size
-            if entries_table_end > len(mm):
-                raise RuntimeError(f"S3P output folder not found: {out_dir}")
+    max_workers = max(1, min(total_wma, os.cpu_count() or 1))
 
-            entries_region = mm[header_struct.size:entries_table_end]
-            for index, (offset, length) in enumerate(entry_struct.iter_unpack(entries_region), start=1):
-                if offset < 0 or length < s3v0_struct.size or offset + length > len(mm):
-                    continue
-                magic_s3v, file_start, _payload_len, _unknown = s3v0_struct.unpack_from(mm, offset)
-                if magic_s3v != s3v_magic:
-                    continue
-                data_start = offset + file_start
-                data_end = offset + length
-                if data_start > data_end:
-                    continue
-                out_name = f"{index:04d}.wav"
-                with (out_dir / out_name).open("wb", buffering=4 * 1024 * 1024) as wf:
-                    wf.write(mm[data_start:data_end])
+    def _transcode_one(wma_file: Path) -> None:
+        wav_file = wma_file.with_suffix(".wav")
+        try:
+            _run_external_command(
+                [
+                    str(ffmpeg_path),
+                    "-nostdin",
+                    "-threads",
+                    "1",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(wma_file),
+                    "-map",
+                    "0:a:0",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(wav_file),
+                ],
+                out_dir,
+                timeout_seconds=180.0,
+            )
+            wma_file.unlink(missing_ok=True)
+        except Exception as exc:
+            raise RuntimeError(f"ffmpeg transcode failed for {wma_file.name}: {exc}") from exc
+
+    completed_count = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_transcode_one, file_path) for file_path in wma_files]
+        for future in as_completed(futures):
+            future.result()
+            completed_count += 1
+            if progress_callback is not None:
+                percent = int((completed_count * 100) / total_wma)
+                progress_callback(min(100, max(0, percent)))
+            if completed_count == total_wma or completed_count % 100 == 0:
+                print(f"S3P audio transcode: {completed_count}/{total_wma}")
 
     if not any(out_dir.glob("*.wav")):
         raise RuntimeError(f"S3P output folder not found: {out_dir}")
+    if progress_callback is not None:
+        progress_callback(100)
     return out_dir
 
 
@@ -628,19 +674,33 @@ def convert_chart(
     include_stagefile: bool = True,
     include_bga: bool = True,
     include_preview: bool = True,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> Path:
+    def _notify_progress(percent: int, stage: str) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(min(100, max(0, int(percent))), stage)
+
+    _notify_progress(0, "init")
     source_kind, source_files = _find_chart_source(sound_root, result.song_id_display)
+    _notify_progress(5, "source")
     temp_root = Path(tempfile.mkdtemp(prefix=f"{_TEMP_DIR_PREFIX}{result.song_id_display}_"))
     work_dir = temp_root / result.song_id_display
     work_dir.mkdir(parents=True, exist_ok=True)
     try:
         if source_kind == "standard":
             copied = _copy_chart_files(source_files, work_dir)
+            _notify_progress(20, "prepare")
             bme_dir = _run_one2bme(project_root, work_dir, copied["one"])
+            _notify_progress(40, "bme")
             if include_preview:
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     main_future = executor.submit(
-                        _extract_wavs_from_s3p, project_root, work_dir, copied["audio"]
+                        _extract_wavs_from_s3p,
+                        project_root,
+                        work_dir,
+                        copied["audio"],
+                        lambda p: _notify_progress(45 + int((min(100, max(0, p)) * 40) / 100), "audio"),
                     )
                     preview_future = executor.submit(
                         _extract_wavs_from_2dx, project_root, work_dir, copied["preview"]
@@ -648,9 +708,15 @@ def convert_chart(
                     main_audio_out_dir = main_future.result()
                     preview_out_dir = preview_future.result()
             else:
-                main_audio_out_dir = _extract_wavs_from_s3p(project_root, work_dir, copied["audio"])
+                main_audio_out_dir = _extract_wavs_from_s3p(
+                    project_root,
+                    work_dir,
+                    copied["audio"],
+                    lambda p: _notify_progress(45 + int((min(100, max(0, p)) * 45) / 100), "audio"),
+                )
                 preview_out_dir = None
-            return _copy_results(
+            _notify_progress(92, "finalize")
+            result_dir = _copy_results(
                 project_root,
                 results_root,
                 result,
@@ -663,25 +729,44 @@ def convert_chart(
                 include_bga=include_bga,
                 include_preview=include_preview,
             )
+            _notify_progress(100, "done")
+            return result_dir
 
         copied = _prepare_from_ifs(project_root, work_dir, result.song_id_display, source_files["ifs"])
+        _notify_progress(20, "prepare")
         bme_dir = _run_one2bme(project_root, work_dir, copied["one"])
+        _notify_progress(40, "bme")
         if include_preview:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 if copied["audio"].suffix.lower() == ".s3p":
-                    main_future = executor.submit(_extract_wavs_from_s3p, project_root, work_dir, copied["audio"])
+                    main_future = executor.submit(
+                        _extract_wavs_from_s3p,
+                        project_root,
+                        work_dir,
+                        copied["audio"],
+                        lambda p: _notify_progress(45 + int((min(100, max(0, p)) * 40) / 100), "audio"),
+                    )
                 else:
                     main_future = executor.submit(_extract_wavs_from_2dx, project_root, work_dir, copied["audio"])
                 preview_future = executor.submit(_extract_wavs_from_2dx, project_root, work_dir, copied["preview"])
                 main_audio_out_dir = main_future.result()
                 preview_out_dir = preview_future.result()
+                if copied["audio"].suffix.lower() != ".s3p":
+                    _notify_progress(85, "audio")
         else:
             if copied["audio"].suffix.lower() == ".s3p":
-                main_audio_out_dir = _extract_wavs_from_s3p(project_root, work_dir, copied["audio"])
+                main_audio_out_dir = _extract_wavs_from_s3p(
+                    project_root,
+                    work_dir,
+                    copied["audio"],
+                    lambda p: _notify_progress(45 + int((min(100, max(0, p)) * 45) / 100), "audio"),
+                )
             else:
                 main_audio_out_dir = _extract_wavs_from_2dx(project_root, work_dir, copied["audio"])
+                _notify_progress(90, "audio")
             preview_out_dir = None
-        return _copy_results(
+        _notify_progress(92, "finalize")
+        result_dir = _copy_results(
             project_root,
             results_root,
             result,
@@ -694,5 +779,7 @@ def convert_chart(
             include_bga=include_bga,
             include_preview=include_preview,
         )
+        _notify_progress(100, "done")
+        return result_dir
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
