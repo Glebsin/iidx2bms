@@ -1,5 +1,6 @@
 import sys
 import ctypes
+import os
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
@@ -14,6 +15,8 @@ from conversion.conversion import cleanup_temp_workdirs
 
 if sys.platform == "win32":
     _dwmapi = ctypes.windll.dwmapi
+
+BUILD_VERSION_SUFFIX = 0
 
 
 def _accent_selection_rgba() -> str:
@@ -39,12 +42,14 @@ def _accent_selection_rgba() -> str:
 
 def _build_app_version() -> str:
     today = date.today()
-    return f"{today.year}.{today.month}{today.day:02d}.0"
+    return f"{today.year}.{today.month}{today.day:02d}.{int(BUILD_VERSION_SUFFIX)}"
 
 
 def main() -> None:
     cleanup_temp_workdirs()
     version = _build_app_version()
+    os.environ["IIDX2BMS_VERSION"] = version
+    os.environ["IIDX2BMS_VERSION_SUFFIX"] = str(int(BUILD_VERSION_SUFFIX))
     from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
 
     app = QApplication(sys.argv)

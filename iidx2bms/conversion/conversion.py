@@ -30,6 +30,7 @@ _GAME_VERSION_CACHE: dict[str, dict[int, int]] = {}
 _SONG_META_CACHE: dict[str, dict[int, dict[str, object]]] = {}
 _MOVIE_FILE_CACHE: dict[str, dict[str, Path]] = {}
 _TEMP_DIR_PREFIX = "iidx2bms_"
+_BME_WRITE_ENCODING = "cp932"
 
 
 def cleanup_temp_workdirs() -> int:
@@ -407,16 +408,16 @@ def _copy_results(
         normalized_name = bme_file.name.lstrip()
         copied_bme = result_dir / normalized_name
         shutil.copy2(bme_file, copied_bme)
-        _strip_bme_metadata(copied_bme)
         difficulty = _difficulty_for_bme_name(normalized_name, result)
-        _set_bme_difficulty(copied_bme, difficulty)
-        if include_stagefile:
-            _set_bme_stagefile(copied_bme, stage_target_name)
-        _set_bme_tag(copied_bme, "#GENRE", genre_value)
-        _set_bme_tag(copied_bme, "#TITLE", title_value)
-        _set_bme_tag(copied_bme, "#ARTIST", artist_value)
-        if include_bga:
-            _set_bme_tag(copied_bme, "#BMP01", bmp01_value)
+        _rewrite_bme(
+            copied_bme,
+            difficulty=difficulty,
+            stagefile_name=stage_target_name if include_stagefile else None,
+            genre_value=genre_value,
+            title_value=title_value,
+            artist_value=artist_value,
+            bmp01_value=bmp01_value if include_bga else None,
+        )
     if include_bga and bmp01_source is not None:
         shutil.copy2(bmp01_source, result_dir / bmp01_source.name)
     for wav_file in sorted(main_audio_out_dir.glob("*.wav")):
@@ -441,6 +442,59 @@ def _read_text_with_fallback(path: Path) -> tuple[str, str]:
     return path.read_text(encoding="latin-1"), "latin-1"
 
 
+def _write_bme_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding=_BME_WRITE_ENCODING, errors="replace")
+
+
+def _rewrite_bme(
+    path: Path,
+    difficulty: int | None,
+    stagefile_name: str | None,
+    genre_value: str,
+    title_value: str,
+    artist_value: str,
+    bmp01_value: str | None,
+) -> None:
+    raw_text, encoding = _read_text_with_fallback(path)
+    lines = raw_text.splitlines(keepends=True)
+    line_break = "\r\n" if "\r\n" in raw_text else "\n"
+
+    tag_values: dict[str, str] = {
+        "#GENRE": genre_value,
+        "#TITLE": title_value,
+        "#ARTIST": artist_value,
+    }
+    if difficulty is not None:
+        tag_values["#PLAYLEVEL"] = str(int(difficulty))
+    if stagefile_name is not None:
+        tag_values["#STAGEFILE"] = stagefile_name
+    if bmp01_value is not None:
+        tag_values["#BMP01"] = bmp01_value
+
+    tag_seen = {tag: False for tag in tag_values}
+    rewritten: list[str] = []
+    for line in lines:
+        normalized = line.lstrip().upper()
+        if normalized.startswith(_BME_REMOVE_PREFIXES):
+            continue
+
+        replaced = False
+        for tag, value in tag_values.items():
+            if normalized.startswith(tag):
+                rewritten.append(f"{tag} {value}{line_break}")
+                tag_seen[tag] = True
+                replaced = True
+                break
+        if not replaced:
+            rewritten.append(line)
+
+    for tag, value in tag_values.items():
+        if not tag_seen[tag]:
+            rewritten.append(f"{tag} {value}{line_break}")
+
+    _write_bme_text(path, "".join(rewritten))
+
+
 def _strip_bme_metadata(path: Path) -> None:
     raw_text, encoding = _read_text_with_fallback(path)
     lines = raw_text.splitlines(keepends=True)
@@ -450,7 +504,7 @@ def _strip_bme_metadata(path: Path) -> None:
         if normalized.startswith(_BME_REMOVE_PREFIXES):
             continue
         filtered_lines.append(line)
-    path.write_text("".join(filtered_lines), encoding=encoding)
+    _write_bme_text(path, "".join(filtered_lines))
 
 
 def _difficulty_for_bme_name(file_name: str, result: SearchResult) -> int | None:
@@ -489,7 +543,7 @@ def _set_bme_difficulty(path: Path, difficulty: int | None) -> None:
             filtered_lines.append(line)
     if not replaced:
         filtered_lines.append(f"#PLAYLEVEL {difficulty}{line_break}")
-    path.write_text("".join(filtered_lines), encoding=encoding)
+    _write_bme_text(path, "".join(filtered_lines))
 
 
 def set_bme_playlevel(path: Path, difficulty: int) -> None:
@@ -510,7 +564,7 @@ def _set_bme_stagefile(path: Path, stagefile_name: str) -> None:
             filtered_lines.append(line)
     if not replaced:
         filtered_lines.append(f"#STAGEFILE {stagefile_name}{line_break}")
-    path.write_text("".join(filtered_lines), encoding=encoding)
+    _write_bme_text(path, "".join(filtered_lines))
 
 
 def _set_bme_tag(path: Path, tag_name: str, tag_value: str) -> None:
@@ -528,7 +582,7 @@ def _set_bme_tag(path: Path, tag_name: str, tag_value: str) -> None:
             filtered_lines.append(line)
     if not replaced:
         filtered_lines.append(f"{tag_name} {tag_value}{line_break}")
-    path.write_text("".join(filtered_lines), encoding=encoding)
+    _write_bme_text(path, "".join(filtered_lines))
 
 
 def _game_version_map(project_root: Path) -> dict[int, int]:
