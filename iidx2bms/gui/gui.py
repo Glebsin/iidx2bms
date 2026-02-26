@@ -6,6 +6,7 @@ import html
 import json
 import subprocess
 from datetime import date
+from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
 from ctypes import wintypes
@@ -56,15 +57,18 @@ from PyQt6.QtWidgets import (
 )
 from search_engine.search_engine import SearchEngine, SearchResult
 from conversion.conversion import convert_chart, set_bme_playlevel
+from remywiki.remywiki import build_remywiki_url
 from PyQt6.QtCore import QUrl
 
-_app_version_from_env = os.environ.get("IIDX2BMS_VERSION", "").strip()
-if _app_version_from_env:
-    APP_VERSION = _app_version_from_env
+if getattr(sys, "frozen", False):
+    try:
+        _build_dt = datetime.fromtimestamp(Path(sys.executable).stat().st_mtime)
+        _today = _build_dt.date()
+    except Exception:
+        _today = date.today()
 else:
     _today = date.today()
-    _suffix = os.environ.get("IIDX2BMS_VERSION_SUFFIX", "0").strip() or "0"
-    APP_VERSION = f"{_today.year}.{_today.month}{_today.day:02d}.{_suffix}"
+APP_VERSION = f"{_today.year}.{_today.month}{_today.day:02d}.0"
 
 
 SEARCH_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640"><path fill="#9a9a9a" d="M480 272C480 317.9 465.1 360.3 440 394.7L566.6 521.4C579.1 533.9 579.1 554.2 566.6 566.7C554.1 579.2 533.8 579.2 521.3 566.7L394.7 440C360.3 465.1 317.9 480 272 480C157.1 480 64 386.9 64 272C64 157.1 157.1 64 272 64C386.9 64 480 157.1 480 272zM272 416C351.5 416 416 351.5 416 272C416 192.5 351.5 128 272 128C192.5 128 128 192.5 128 272C128 351.5 192.5 416 272 416z"/></svg>'
@@ -420,6 +424,9 @@ QProgressBar#ConversionProgressBar[pending="true"]::chunk {
     border-radius: 3px;
     margin: 0px;
 }
+QProgressBar#ConversionProgressBar[failed="true"] {
+    border: 1px solid #ff0000;
+}
 QListWidget#SearchResults::item {
     border: none;
     padding: 0px;
@@ -539,9 +546,12 @@ QLineEdit#ChartEditInput {
     color: #f0f0f0;
     min-height: 20px;
     max-height: 20px;
-    padding: 0 6px;
+    padding: 0 6px 0 4px;
     selection-background-color: #3a3a3a;
     selection-color: #f0f0f0;
+}
+QLineEdit#ChartEditInput[textClipped="true"] {
+    padding-left: 6px;
 }
 QLineEdit#ChartEditInput:focus {
     border: 1px solid #4d4d4d;
@@ -1365,9 +1375,11 @@ class AnchoredLineEdit(QLineEdit):
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setProperty("textClipped", False)
         self.cursorPositionChanged.connect(self._sync_input_method)
         self.textEdited.connect(self._sync_input_method)
         self.selectionChanged.connect(self._sync_input_method)
+        self.textChanged.connect(self._update_clipped_padding)
 
     def _sync_input_method(self) -> None:
         self.updateMicroFocus()
@@ -1425,6 +1437,30 @@ class AnchoredLineEdit(QLineEdit):
     def keyPressEvent(self, event) -> None:
         super().keyPressEvent(event)
         QTimer.singleShot(0, self._sync_input_method)
+        QTimer.singleShot(0, self._update_clipped_padding)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._update_clipped_padding)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._update_clipped_padding)
+
+    def _update_clipped_padding(self) -> None:
+        text = self.text()
+        if not text:
+            clipped = False
+        else:
+            text_width = self.fontMetrics().horizontalAdvance(text)
+            clipped = text_width > max(0, self.width() - 14)
+        previous = bool(self.property("textClipped"))
+        if previous == clipped:
+            return
+        self.setProperty("textClipped", clipped)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
 
 class SmoothListWidget(QListWidget):
@@ -1752,7 +1788,7 @@ class MainWindow(QMainWindow):
         self._hard_min_height = 620
         self.setMinimumSize(self._hard_min_width, self._hard_min_height)
         self._active_popup: MiniPopup | None = None
-        self._active_popup_button: QToolButton | None = None
+        self._active_popup_button: QWidget | None = None
         self._search_input: SearchLineEdit | None = None
         self._search_results: QListWidget | None = None
         self._conversion_logs_results: QTextEdit | None = None
@@ -1765,6 +1801,8 @@ class MainWindow(QMainWindow):
         self._chart_editing_status_label: QLabel | None = None
         self._chart_editing_reset_button: QPushButton | None = None
         self._chart_editing_continue_button: QPushButton | None = None
+        self._chart_editing_remywiki_button: QPushButton | None = None
+        self._chart_editing_buttons_row: QWidget | None = None
         self._chart_edit_selected_widget: QWidget | None = None
         self._chart_edit_selected_song_id: int | None = None
         self._chart_editing_attention_on = False
@@ -1920,12 +1958,13 @@ class MainWindow(QMainWindow):
                 self._on_popup_action,
             )
         )
+        ui_version = QApplication.instance().applicationVersion().strip() or APP_VERSION
         top_layout.addWidget(
             self._make_menu_button(
                 "About",
                 [
                     ("iidx2bms GitHub page", "https://github.com/Glebsin/iidx2bms/"),
-                    (f"Version: {APP_VERSION}", f"copy:{APP_VERSION}"),
+                    (f"Version: {ui_version}", f"copy:{ui_version}"),
                 ],
             )
         )
@@ -2082,7 +2121,7 @@ class MainWindow(QMainWindow):
         painter.end()
         return pixmap
 
-    def _clear_icon_pixmap(self, size: int = 15) -> QPixmap:
+    def _clear_icon_pixmap(self, size: int = 16) -> QPixmap:
         renderer = QSvgRenderer(QByteArray(CLEAR_ICON_SVG))
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
@@ -2266,8 +2305,8 @@ class MainWindow(QMainWindow):
             clear_button.setObjectName("SearchClearButton")
             clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
             clear_button.setToolTip("Clear search")
-            clear_button.setIcon(QIcon(self._clear_icon_pixmap(15)))
-            clear_button.setIconSize(QSize(15, 15))
+            clear_button.setIcon(QIcon(self._clear_icon_pixmap(16)))
+            clear_button.setIconSize(QSize(16, 16))
             clear_button.clicked.connect(self._on_clear_search_clicked)
             self._search_clear_button = clear_button
             search_layout.addWidget(clear_button, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -2476,6 +2515,26 @@ class MainWindow(QMainWindow):
         )
         self._chart_editing_results = editing_list
         body_layout.addWidget(editing_list, 1)
+        body_layout.addSpacing(8)
+
+        buttons_row = QWidget()
+        buttons_layout = QHBoxLayout(buttons_row)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(8)
+        buttons_layout.addStretch(1)
+        buttons_row.setVisible(False)
+        self._chart_editing_buttons_row = buttons_row
+
+        remywiki_button = QPushButton("Open on RemyWiki")
+        remywiki_button.setObjectName("PanelActionButton")
+        remywiki_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        remywiki_button.clicked.connect(self._on_open_remywiki_clicked)
+        remywiki_width = remywiki_button.fontMetrics().horizontalAdvance("Open on RemyWiki") + 16
+        remywiki_button.setFixedSize(remywiki_width, 22)
+        remywiki_button.setVisible(False)
+        self._chart_editing_remywiki_button = remywiki_button
+        buttons_layout.addWidget(remywiki_button, 0, Qt.AlignmentFlag.AlignRight)
+        body_layout.addWidget(buttons_row, 0)
 
         panel_layout.addWidget(header_wrap)
         panel_layout.addWidget(header_line)
@@ -2918,6 +2977,8 @@ class MainWindow(QMainWindow):
         if progress_bar is None:
             return
         bounded = min(100, max(0, int(percent)))
+        if progress_bar.property("failed"):
+            progress_bar.setProperty("failed", False)
         if progress_bar.property("pending"):
             progress_bar.setProperty("pending", False)
             progress_bar.style().unpolish(progress_bar)
@@ -2937,6 +2998,8 @@ class MainWindow(QMainWindow):
         if progress_bar is None:
             return
         bounded = min(99, max(0, int(percent)))
+        if progress_bar.property("failed"):
+            progress_bar.setProperty("failed", False)
         if not progress_bar.property("pending"):
             progress_bar.setProperty("pending", True)
         progress_bar.setProperty("textDark", True)
@@ -2945,6 +3008,20 @@ class MainWindow(QMainWindow):
         progress_bar.update()
         progress_bar.setValue(bounded)
         progress_bar.setFormat(f"{bounded}%")
+
+    def _set_conversion_chart_failed(self, song_id_display: str) -> None:
+        progress_bar = self._conversion_progress_bars.get(song_id_display)
+        if progress_bar is None:
+            return
+        if progress_bar.property("pending"):
+            progress_bar.setProperty("pending", False)
+        progress_bar.setProperty("failed", True)
+        progress_bar.setProperty("textDark", False)
+        progress_bar.style().unpolish(progress_bar)
+        progress_bar.style().polish(progress_bar)
+        progress_bar.update()
+        progress_bar.setValue(0)
+        progress_bar.setFormat("0%")
 
     def _contains_non_standard_symbols(self, text: str) -> bool:
         return re.search(r"[^A-Za-z0-9 \t\-\_\.\,\!\?\:\;\'\"\/\&\+\(\)\[\]]", text) is not None
@@ -3249,6 +3326,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_chart_editing_header_controls(self) -> None:
         charts_count = self._chart_editing_results.count() if self._chart_editing_results is not None else 0
+        show_remywiki = False
         if self._chart_editing_status_label is not None:
             self._chart_editing_status_label.setVisible(False)
             self._chart_editing_status_label.setText("")
@@ -3266,26 +3344,54 @@ class MainWindow(QMainWindow):
                         + 40
                     )
                     self._chart_editing_continue_button.setFixedWidth(width)
-            return
+        else:
+            has_edits = self._has_chart_name_overrides()
+            if self._chart_editing_reset_button is not None:
+                self._chart_editing_reset_button.setVisible(charts_count > 0 and has_edits)
+            if self._chart_editing_continue_button is not None:
+                waiting = self._awaiting_chart_editing_action and charts_count > 0
+                self._chart_editing_continue_button.setVisible(waiting)
+                if waiting:
+                    text = (
+                        "Apply and continue conversion"
+                        if has_edits
+                        else "Skip editing and continue conversion"
+                    )
+                    self._chart_editing_continue_button.setText(text)
+                    width = (
+                        self._chart_editing_continue_button.fontMetrics().horizontalAdvance(text)
+                        + 40
+                    )
+                    self._chart_editing_continue_button.setFixedWidth(width)
 
-        has_edits = self._has_chart_name_overrides()
-        if self._chart_editing_reset_button is not None:
-            self._chart_editing_reset_button.setVisible(charts_count > 0 and has_edits)
-        if self._chart_editing_continue_button is not None:
-            waiting = self._awaiting_chart_editing_action and charts_count > 0
-            self._chart_editing_continue_button.setVisible(waiting)
-            if waiting:
-                text = (
-                    "Apply and continue conversion"
-                    if has_edits
-                    else "Skip editing and continue conversion"
-                )
-                self._chart_editing_continue_button.setText(text)
-                width = (
-                    self._chart_editing_continue_button.fontMetrics().horizontalAdvance(text)
-                    + 40
-                )
-                self._chart_editing_continue_button.setFixedWidth(width)
+        show_remywiki = self._resolve_chart_for_remywiki_title() is not None
+        if self._chart_editing_remywiki_button is not None:
+            self._chart_editing_remywiki_button.setVisible(show_remywiki)
+            self._chart_editing_remywiki_button.setEnabled(show_remywiki)
+        if self._chart_editing_buttons_row is not None:
+            self._chart_editing_buttons_row.setVisible(show_remywiki)
+
+    def _resolve_chart_for_remywiki_title(self) -> str | None:
+        if self._chart_editing_results is None:
+            return None
+        item = self._chart_editing_results.currentItem()
+        if item is None and self._chart_editing_results.count() > 0:
+            item = self._chart_editing_results.item(0)
+        if item is None:
+            return None
+        base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+        if not isinstance(base_result, SearchResult):
+            base_result = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(base_result, SearchResult):
+            return None
+        title = (base_result.title or "").strip()
+        return title or None
+
+    def _on_open_remywiki_clicked(self) -> None:
+        title = self._resolve_chart_for_remywiki_title()
+        if not title:
+            return
+        QDesktopServices.openUrl(QUrl(build_remywiki_url(title)))
 
     def _set_chart_editing_attention(self, enabled: bool) -> None:
         if self._chart_editing_panel is None:
@@ -3398,10 +3504,19 @@ class MainWindow(QMainWindow):
         artist_input.setProperty("chart_editing_song_id", result.song_id)
         artist_input.installEventFilter(self)
         is_playlevel_mode = self._is_playlevel_editing_mode()
-        names_edit_locked = self._always_skip_chart_names_editing and not is_playlevel_mode
+        conversion_names_locked = self._conversion_active and not is_playlevel_mode
+        names_edit_locked = conversion_names_locked or (
+            self._always_skip_chart_names_editing and not is_playlevel_mode
+        )
+        if is_playlevel_mode:
+            names_locked_tooltip = "Copy-only field"
+        elif conversion_names_locked:
+            names_locked_tooltip = ""
+        else:
+            names_locked_tooltip = self._chart_editing_locked_tooltip() if names_edit_locked else ""
         artist_input.setEnabled(not names_edit_locked)
         artist_input.setReadOnly(is_playlevel_mode)
-        artist_input.setToolTip(self._chart_editing_locked_tooltip() if names_edit_locked else "")
+        artist_input.setToolTip(names_locked_tooltip)
         artist_input.textChanged.connect(
             lambda text, sid=result.song_id: self._set_chart_name_override(sid, "artist", text)
         )
@@ -3419,7 +3534,7 @@ class MainWindow(QMainWindow):
         title_input.installEventFilter(self)
         title_input.setEnabled(not names_edit_locked)
         title_input.setReadOnly(is_playlevel_mode)
-        title_input.setToolTip(self._chart_editing_locked_tooltip() if names_edit_locked else "")
+        title_input.setToolTip(names_locked_tooltip)
         title_input.textChanged.connect(
             lambda text, sid=result.song_id: self._set_chart_name_override(sid, "title", text)
         )
@@ -3443,7 +3558,7 @@ class MainWindow(QMainWindow):
         genre_input.installEventFilter(self)
         genre_input.setEnabled(not names_edit_locked)
         genre_input.setReadOnly(is_playlevel_mode)
-        genre_input.setToolTip(self._chart_editing_locked_tooltip() if names_edit_locked else "")
+        genre_input.setToolTip(names_locked_tooltip)
         genre_input.textChanged.connect(
             lambda text, sid=result.song_id: self._set_chart_name_override(sid, "genre", text)
         )
@@ -3514,6 +3629,7 @@ class MainWindow(QMainWindow):
                 edit_item = QListWidgetItem()
                 edit_item.setData(Qt.ItemDataRole.UserRole, result.song_id)
                 edit_item.setData(Qt.ItemDataRole.UserRole + 1, result)
+                edit_item.setData(Qt.ItemDataRole.UserRole + 2, result)
                 row_height = 80 + max(0, len(entries)) * 34
                 edit_item.setSizeHint(QSize(0, row_height))
                 self._chart_editing_results.addItem(edit_item)
@@ -3569,6 +3685,7 @@ class MainWindow(QMainWindow):
             edit_item = QListWidgetItem()
             edit_item.setData(Qt.ItemDataRole.UserRole, result.song_id)
             edit_item.setData(Qt.ItemDataRole.UserRole + 1, result)
+            edit_item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
             edit_item.setSizeHint(QSize(0, 72))
             self._chart_editing_results.addItem(edit_item)
             self._chart_editing_results.setItemWidget(
@@ -3792,6 +3909,7 @@ class MainWindow(QMainWindow):
             f"STAGEFILE: {stagefile_text}, BGA: {bga_text}, Audio preview: {preview_text}"
         )
         self._conversion_active = True
+        self._update_chart_editing_list()
         self._update_start_conversion_button_state()
         self._update_conversion_inputs_locked_state()
         self._conversion_pool.setMaxThreadCount(4 if parallel_converting else 1)
@@ -4062,7 +4180,7 @@ class MainWindow(QMainWindow):
             self._set_conversion_chart_progress(song_id_display, 99)
         failed_match = re.match(r"^Failed:\s*(\d{5})\s*:", rendered)
         if failed_match:
-            self._set_conversion_chart_progress(failed_match.group(1), 0)
+            self._set_conversion_chart_failed(failed_match.group(1))
         self._append_conversion_log(message)
 
     def _resolve_current_conversion_paths(self) -> tuple[Path, Path, Path, Path] | None:
@@ -4244,10 +4362,12 @@ class MainWindow(QMainWindow):
         if item is None:
             self._chart_edit_selected_song_id = None
             self._set_chart_editing_selected_visual(None)
+            self._refresh_chart_editing_header_controls()
             return
         song_id = item.data(Qt.ItemDataRole.UserRole)
         self._chart_edit_selected_song_id = song_id if isinstance(song_id, int) else None
         self._set_chart_editing_selected_visual(item)
+        self._refresh_chart_editing_header_controls()
 
     def _set_chart_editing_selected_visual(self, item: QListWidgetItem | None) -> None:
         if self._chart_editing_results is None:
@@ -4744,7 +4864,7 @@ class MainWindow(QMainWindow):
         self._set_active_page_button(self._main_page_button, False)
         self._set_active_page_button(self._processing_page_button, True)
 
-    def _show_popup(self, button: QToolButton, items: list[tuple[str, str | None]], on_action=None) -> None:
+    def _show_popup(self, button: QWidget, items: list[tuple[str, str | None]], on_action=None) -> None:
         if self._active_popup is not None:
             self._active_popup.close()
             self._active_popup = None
@@ -4763,7 +4883,8 @@ class MainWindow(QMainWindow):
         owner = self._active_popup_button
         self._active_popup_button = None
         if owner is not None:
-            owner.setDown(False)
+            if hasattr(owner, "setDown"):
+                owner.setDown(False)
             owner.clearFocus()
             QApplication.sendEvent(owner, QEvent(QEvent.Type.Leave))
             owner.style().unpolish(owner)

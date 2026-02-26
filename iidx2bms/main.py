@@ -1,7 +1,7 @@
 import sys
 import ctypes
-import os
 from datetime import date
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 from ctypes import wintypes
@@ -41,6 +41,13 @@ def _accent_selection_rgba() -> str:
 
 
 def _build_app_version() -> str:
+    if getattr(sys, "frozen", False):
+        try:
+            build_dt = datetime.fromtimestamp(Path(sys.executable).stat().st_mtime)
+            build_date = build_dt.date()
+            return f"{build_date.year}.{build_date.month}{build_date.day:02d}.{int(BUILD_VERSION_SUFFIX)}"
+        except Exception:
+            pass
     today = date.today()
     return f"{today.year}.{today.month}{today.day:02d}.{int(BUILD_VERSION_SUFFIX)}"
 
@@ -48,8 +55,6 @@ def _build_app_version() -> str:
 def main() -> None:
     cleanup_temp_workdirs()
     version = _build_app_version()
-    os.environ["IIDX2BMS_VERSION"] = version
-    os.environ["IIDX2BMS_VERSION_SUFFIX"] = str(int(BUILD_VERSION_SUFFIX))
     from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
 
     app = QApplication(sys.argv)
