@@ -25,7 +25,7 @@
 # HOW TO COMPILE
 Install requirements - `python -m pip install --upgrade pip && python -m pip install PyQt6 ifstools pyinstaller`
 
-Compile iidx2bms exe file - `python -m PyInstaller --noconfirm --clean --windowed --onefile --name iidx2bms --icon icon\iidx2bms_logo.ico --hidden-import PyQt6.QtSvg --hidden-import ifstools.ifs --collect-all ifstools --add-data "gui\assets;gui\assets" --add-data "icon;icon" --add-data "music_data;music_data" --add-data "stagefiles;stagefiles" --add-data "one2bme;one2bme" --add-data "2dx_extract;2dx_extract" --add-data "s3p_extract;s3p_extract" --add-data "ifs_unpack;ifs_unpack" main.py`
+Compile iidx2bms exe file - `python -m PyInstaller --noconfirm --clean --windowed --onefile --name iidx2bms --icon icon\iidx2bms_logo.ico --hidden-import PyQt6.QtSvg --hidden-import ifstools.ifs --collect-all ifstools --add-data "icon;icon" --add-data "music_data;music_data" --add-data "stagefiles;stagefiles" --add-data "one2bme;one2bme" --add-data "2dx_extract;2dx_extract" --add-data "s3p_extract;s3p_extract" --add-data "ifs_unpack;ifs_unpack" main.py`
 
 
 
