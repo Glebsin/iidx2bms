@@ -16,16 +16,7 @@ from ifstools.ifs import IFS
 from search_engine.search_engine import SearchResult
 
 
-_BME_REMOVE_PREFIXES = (
-    "#SUBARTIST",
-    "#VOLWAV",
-    "#MOVIEDELAY",
-    "#PLAYTIME",
-    "#PREVIEW",
-    "#TOTALNOTES",
-    "#REALNOTES",
-    "#BACKBMP",
-)
+_BME_REMOVE_PREFIXES: tuple[str, ...] = ()
 _GAME_VERSION_CACHE: dict[str, dict[int, int]] = {}
 _SONG_META_CACHE: dict[str, dict[int, dict[str, object]]] = {}
 _MOVIE_FILE_CACHE: dict[str, dict[str, Path]] = {}
@@ -324,7 +315,7 @@ def _run_one2bme(project_root: Path, work_dir: Path, one_file: Path) -> Path:
 
     attempt_logs: list[str] = []
     for command, cwd in strategies:
-        code, output = _run_external_command(command, cwd, "\n\n", raise_on_error=False)
+        code, output = _run_external_command(command, cwd, raise_on_error=False)
         preview = output.strip().splitlines()
         preview_text = " | ".join(preview[-3:]) if preview else ""
         attempt_logs.append(f"cmd={' '.join(command)} cwd={cwd} code={code} out={preview_text}")
