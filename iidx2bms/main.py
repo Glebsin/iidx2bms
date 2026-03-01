@@ -1,5 +1,6 @@
 import sys
 import ctypes
+import tempfile
 from datetime import date
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,13 @@ def _accent_selection_rgba() -> str:
     return f"rgba({highlight.red()}, {highlight.green()}, {highlight.blue()}, 70)"
 
 
+def _history_selected_border_color() -> str:
+    highlight = QGuiApplication.palette().color(QPalette.ColorRole.Highlight)
+    if not isinstance(highlight, QColor) or not highlight.isValid():
+        return "#8ea4c0"
+    return highlight.lighter(118).name()
+
+
 def _build_app_version() -> str:
     if getattr(sys, "frozen", False):
         try:
@@ -52,10 +60,26 @@ def _build_app_version() -> str:
     return f"{today.year}.{today.month}{today.day:02d}.{int(BUILD_VERSION_SUFFIX)}"
 
 
+def _write_runtime_svg_icon(file_name: str, svg_bytes: bytes) -> Path:
+    assets_dir = Path(tempfile.gettempdir()) / "iidx2bms_runtime_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    icon_path = assets_dir / file_name
+    if not icon_path.exists() or icon_path.read_bytes() != svg_bytes:
+        icon_path.write_bytes(svg_bytes)
+    return icon_path
+
+
 def main() -> None:
     cleanup_temp_workdirs()
     version = _build_app_version()
-    from gui.gui import InstantTooltipStyle, MainWindow, STYLESHEET
+    from gui.gui import (
+        CHECKBOX_CHECK_ICON_SVG,
+        InstantTooltipStyle,
+        SCROLL_DOWN_ICON_SVG,
+        SCROLL_UP_ICON_SVG,
+        MainWindow,
+        STYLESHEET,
+    )
 
     app = QApplication(sys.argv)
     app.setApplicationVersion(version)
@@ -68,18 +92,28 @@ def main() -> None:
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     app.setFont(font)
 
-    assets_dir = Path(__file__).resolve().parent / "gui" / "assets"
     app_icon = QIcon(str((Path(__file__).resolve().parent / "icon" / "iidx2bms_logo.ico")))
-    scroll_up_icon = quote((assets_dir / "scroll_up.svg").as_posix(), safe="/:")
-    scroll_down_icon = quote((assets_dir / "scroll_down.svg").as_posix(), safe="/:")
-    check_icon = quote((assets_dir / "check.svg").as_posix(), safe="/:")
+    scroll_up_icon = quote(
+        _write_runtime_svg_icon("scroll_up.svg", SCROLL_UP_ICON_SVG).as_posix(),
+        safe="/:",
+    )
+    scroll_down_icon = quote(
+        _write_runtime_svg_icon("scroll_down.svg", SCROLL_DOWN_ICON_SVG).as_posix(),
+        safe="/:",
+    )
+    check_icon = quote(
+        _write_runtime_svg_icon("check.svg", CHECKBOX_CHECK_ICON_SVG).as_posix(),
+        safe="/:",
+    )
     accent_bg = _accent_selection_rgba()
+    history_selected_border = _history_selected_border_color()
 
     app.setStyleSheet(
         STYLESHEET.replace("__SCROLL_UP_ICON__", scroll_up_icon)
         .replace("__SCROLL_DOWN_ICON__", scroll_down_icon)
         .replace("__CHECK_ICON__", check_icon)
         .replace("__ACCENT_BG__", accent_bg)
+        .replace("__HISTORY_SELECTED_BORDER__", history_selected_border)
     )
 
     app.setWindowIcon(app_icon)

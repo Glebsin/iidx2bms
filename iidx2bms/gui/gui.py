@@ -11,11 +11,15 @@ from dataclasses import replace
 from pathlib import Path
 from ctypes import wintypes
 from PyQt6.QtCore import (
+    QAbstractAnimation,
     QByteArray,
     QElapsedTimer,
     QEvent,
+    QEasingCurve,
+    QFileSystemWatcher,
     QObject,
     QPoint,
+    QPropertyAnimation,
     QProcess,
     QProcessEnvironment,
     QRunnable,
@@ -39,6 +43,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -58,6 +63,16 @@ from PyQt6.QtWidgets import (
 from search_engine.search_engine import SearchEngine, SearchResult
 from conversion.conversion import convert_chart, set_bme_playlevel
 from remywiki.remywiki import build_remywiki_url
+from history.history import (
+    ConversionHistoryRun,
+    ConversionHistoryStore,
+    ConversionSessionRecorder,
+    build_conversion_history_page,
+    find_run_by_id,
+    render_run_details,
+    render_runs_list,
+)
+from window.window import restore_window_placement, save_window_placement
 from PyQt6.QtCore import QUrl
 
 if getattr(sys, "frozen", False):
@@ -73,10 +88,13 @@ APP_VERSION = f"{_today.year}.{_today.month}{_today.day:02d}.0"
 
 SEARCH_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640"><path fill="#9a9a9a" d="M480 272C480 317.9 465.1 360.3 440 394.7L566.6 521.4C579.1 533.9 579.1 554.2 566.6 566.7C554.1 579.2 533.8 579.2 521.3 566.7L394.7 440C360.3 465.1 317.9 480 272 480C157.1 480 64 386.9 64 272C64 157.1 157.1 64 272 64C386.9 64 480 157.1 480 272zM272 416C351.5 416 416 351.5 416 272C416 192.5 351.5 128 272 128C192.5 128 128 192.5 128 272C128 351.5 192.5 416 272 416z"/></svg>'
 CLEAR_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640"><path fill="#be0420" d="M183.1 137.4C170.6 124.9 150.3 124.9 137.8 137.4C125.3 149.9 125.3 170.2 137.8 182.7L275.2 320L137.9 457.4C125.4 469.9 125.4 490.2 137.9 502.7C150.4 515.2 170.7 515.2 183.2 502.7L320.5 365.3L457.9 502.6C470.4 515.1 490.7 515.1 503.2 502.6C515.7 490.1 515.7 469.8 503.2 457.3L365.8 320L503.1 182.6C515.6 170.1 515.6 149.8 503.1 137.3C490.6 124.8 470.3 124.8 457.8 137.3L320.5 274.7L183.1 137.4z"/></svg>'
-TRASH_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="#FF0000" d="M136.7 5.9C141.1-7.2 153.3-16 167.1-16l113.9 0c13.8 0 26 8.8 30.4 21.9L320 32 416 32c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 96C14.3 96 0 81.7 0 64S14.3 32 32 32l96 0 8.7-26.1zM32 144l384 0 0 304c0 35.3-28.7 64-64 64L96 512c-35.3 0-64-28.7-64-64l0-304zm88 64c-13.3 0-24 10.7-24 24l0 192c0 13.3 10.7 24 24 24s24-10.7 24-24l0-192c0-13.3-10.7-24-24-24zm104 0c-13.3 0-24 10.7-24 24l0 192c0 13.3 10.7 24 24 24s24-10.7 24-24l0-192c0-13.3-10.7-24-24-24zm104 0c-13.3 0-24 10.7-24 24l0 192c0 13.3 10.7 24 24 24s24-10.7 24-24l0-192c0-13.3-10.7-24-24-24z"/></svg>'
+TRASH_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="#be0420" d="M136.7 5.9C141.1-7.2 153.3-16 167.1-16l113.9 0c13.8 0 26 8.8 30.4 21.9L320 32 416 32c17.7 0 32 14.3 32 32s-14.3 32-32 32L32 96C14.3 96 0 81.7 0 64S14.3 32 32 32l96 0 8.7-26.1zM32 144l384 0 0 304c0 35.3-28.7 64-64 64L96 512c-35.3 0-64-28.7-64-64l0-304zm88 64c-13.3 0-24 10.7-24 24l0 192c0 13.3 10.7 24 24 24s24-10.7 24-24l0-192c0-13.3-10.7-24-24-24zm104 0c-13.3 0-24 10.7-24 24l0 192c0 13.3 10.7 24 24 24s24-10.7 24-24l0-192c0-13.3-10.7-24-24-24zm104 0c-13.3 0-24 10.7-24 24l0 192c0 13.3 10.7 24 24 24s24-10.7 24-24l0-192c0-13.3-10.7-24-24-24z"/></svg>'
 CHECK_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="#cfcfcf" d="M434.8 70.1c14.3 10.4 17.5 30.4 7.1 44.7l-256 352c-5.5 7.6-14 12.3-23.4 13.1s-18.5-2.7-25.1-9.3l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l101.5 101.5 234-321.7c10.4-14.3 30.4-17.5 44.7-7.1z"/></svg>'
-CHECK_GREEN_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="#00e37f" d="M434.8 70.1c14.3 10.4 17.5 30.4 7.1 44.7l-256 352c-5.5 7.6-14 12.3-23.4 13.1s-18.5-2.7-25.1-9.3l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l101.5 101.5 234-321.7c10.4-14.3 30.4-17.5 44.7-7.1z"/></svg>'
+CHECK_GREEN_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="#40c977" d="M434.8 70.1c14.3 10.4 17.5 30.4 7.1 44.7l-256 352c-5.5 7.6-14 12.3-23.4 13.1s-18.5-2.7-25.1-9.3l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l101.5 101.5 234-321.7c10.4-14.3 30.4-17.5 44.7-7.1z"/></svg>'
 RESET_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640"><path fill="#f0f0f0" d="M320 128C263.2 128 212.1 152.7 176.9 192L224 192C241.7 192 256 206.3 256 224C256 241.7 241.7 256 224 256L96 256C78.3 256 64 241.7 64 224L64 96C64 78.3 78.3 64 96 64C113.7 64 128 78.3 128 96L128 150.7C174.9 97.6 243.5 64 320 64C461.4 64 576 178.6 576 320C576 461.4 461.4 576 320 576C233 576 156.1 532.6 109.9 466.3C99.8 451.8 103.3 431.9 117.8 421.7C132.3 411.5 152.2 415.1 162.4 429.6C197.2 479.4 254.8 511.9 320 511.9C426 511.9 512 425.9 512 319.9C512 213.9 426 128 320 128z"/></svg>'
+SCROLL_UP_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640"><path fill="#6a6a6a" d="M355.2 85C348.2 72.1 334.7 64 320 64C305.3 64 291.8 72.1 284.8 85L68.8 485C62.1 497.4 62.4 512.4 69.6 524.5C76.8 536.6 89.9 544 104 544L536 544C550.1 544 563.1 536.6 570.4 524.5C577.7 512.4 577.9 497.4 571.2 485L355.2 85z"/></svg>'
+SCROLL_DOWN_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640"><path fill="#6a6a6a" d="M284.8 555C291.8 567.9 305.3 576 320 576C334.7 576 348.2 567.9 355.2 555L571.2 155C577.9 142.6 577.6 127.6 570.4 115.5C563.2 103.4 550.1 96 536 96L104 96C89.9 96 76.9 103.4 69.6 115.5C62.3 127.6 62.1 142.6 68.8 155L284.8 555z"/></svg>'
+CHECKBOX_CHECK_ICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#cfcfcf" d="M6.3 12.2L2.7 8.6l1.1-1.1 2.5 2.5 5.9-5.9 1.1 1.1z"/></svg>'
 
 if sys.platform == "win32":
     class _POINT(ctypes.Structure):
@@ -137,6 +155,7 @@ QToolTip {
     border: 1px solid #7a7a7a;
     border-radius: 4px;
     color: #f0f0f0;
+    margin: 0px;
     padding: 2px 4px;
 }
 QToolButton#MiniButton {
@@ -415,7 +434,7 @@ QProgressBar#ConversionProgressBar[textDark="true"] {
     color: #101010;
 }
 QProgressBar#ConversionProgressBar::chunk {
-    background: #00e37f;
+    background: #026e0d;
     border-radius: 3px;
     margin: 0px;
 }
@@ -429,14 +448,14 @@ QProgressBar#ConversionProgressBar[failed="true"] {
 }
 QListWidget#SearchResults::item {
     border: none;
-    padding: 0px;
+    padding: 0 0 1px 0;
 }
 QListWidget#SearchResults::item:selected {
     background: transparent;
 }
 QFrame#SearchChartItem {
     background: transparent;
-    border: none;
+    border: 1px solid #5b6068;
     border-radius: 4px;
 }
 QFrame#SearchChartItem[conversionLocked="true"] {
@@ -444,9 +463,13 @@ QFrame#SearchChartItem[conversionLocked="true"] {
 }
 QFrame#SearchChartItem[selected="true"] {
     background: __ACCENT_BG__;
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
 }
 QFrame#SearchChartItem[selected="true"][conversionLocked="true"] {
     background: #4a2530;
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
 }
 QLabel#SearchChartPrimary {
     color: #f0f0f0;
@@ -470,11 +493,24 @@ QListWidget#SelectedResults {
 }
 QListWidget#SelectedResults::item {
     border: none;
+    padding: 0 0 1px 0;
+}
+QListWidget#HistoryRunsList,
+QListWidget#HistoryDetailsList {
+    background: #1e1e1e;
+    border: 1px solid #101010;
+    border-radius: 4px;
+    color: #f0f0f0;
+    outline: none;
+}
+QListWidget#HistoryRunsList::item,
+QListWidget#HistoryDetailsList::item {
+    border: none;
     padding: 0px;
 }
 QFrame#SelectedChartItem {
     background: #1e1e1e;
-    border: none;
+    border: 1px solid #5b6068;
     border-radius: 4px;
 }
 QFrame#SelectedChartItem[conversionLocked="true"] {
@@ -482,13 +518,51 @@ QFrame#SelectedChartItem[conversionLocked="true"] {
 }
 QFrame#SelectedChartItem[selected="true"] {
     background: __ACCENT_BG__;
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
 }
 QFrame#SelectedChartItem[matched="true"] {
     background: __ACCENT_BG__;
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
 }
 QFrame#SelectedChartItem[selected="true"][conversionLocked="true"],
 QFrame#SelectedChartItem[matched="true"][conversionLocked="true"] {
     background: #4a2530;
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
+}
+QFrame#SelectedChartItem[historyStatus="success"] {
+    background: #013f06;
+    border-left: 1px solid #1aa32a;
+    border-right: 1px solid #1aa32a;
+    border-bottom: 1px solid #1aa32a;
+    border-top: 1px solid #1aa32a;
+    border-radius: 4px;
+}
+QFrame#SelectedChartItem[historyStatus="failed"] {
+    background: #2f0505;
+    border-left: 1px solid #7a1414;
+    border-right: 1px solid #7a1414;
+    border-bottom: 1px solid #7a1414;
+    border-top: 1px solid #7a1414;
+    border-radius: 4px;
+}
+QFrame#SelectedChartItem[historyRun="true"] {
+    border: 1px solid #5b6068;
+    border-radius: 4px;
+}
+QFrame#SelectedChartItem[historyRun="true"][selected="true"] {
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
+}
+QFrame#SelectedChartItem[chartEditingRow="true"] {
+    border: 1px solid #5b6068;
+    border-radius: 4px;
+}
+QFrame#SelectedChartItem[chartEditingRow="true"][selected="true"] {
+    border: 1px solid __HISTORY_SELECTED_BORDER__;
+    border-radius: 4px;
 }
 QLabel#SelectedChartPrimary {
     color: #f0f0f0;
@@ -539,6 +613,9 @@ QPushButton#SelectedResetButton:hover {
 QPushButton#SelectedResetButton:pressed {
     background: #252525;
 }
+QPushButton#SelectedResetButton[applyOffset="true"] {
+    margin-top: 7px;
+}
 QLineEdit#ChartEditInput {
     background: #1e1e1e;
     border: 1px solid #3c3c3c;
@@ -571,6 +648,8 @@ QLabel#ChartEditPrefix {
 }
 QListWidget#SearchResults QScrollBar:vertical,
 QListWidget#SelectedResults QScrollBar:vertical,
+QListWidget#HistoryRunsList QScrollBar:vertical,
+QListWidget#HistoryDetailsList QScrollBar:vertical,
 QTextEdit#ConversionLogs QScrollBar:vertical,
 QListWidget#ConversionProgressList QScrollBar:vertical {
     background: #1f1f1f;
@@ -581,6 +660,8 @@ QListWidget#ConversionProgressList QScrollBar:vertical {
 }
 QListWidget#SearchResults QScrollBar::handle:vertical,
 QListWidget#SelectedResults QScrollBar::handle:vertical,
+QListWidget#HistoryRunsList QScrollBar::handle:vertical,
+QListWidget#HistoryDetailsList QScrollBar::handle:vertical,
 QTextEdit#ConversionLogs QScrollBar::handle:vertical,
 QListWidget#ConversionProgressList QScrollBar::handle:vertical {
     background: #6a6a6a;
@@ -591,14 +672,20 @@ QListWidget#ConversionProgressList QScrollBar::handle:vertical {
 }
 QListWidget#SearchResults QScrollBar::handle:vertical:hover,
 QListWidget#SelectedResults QScrollBar::handle:vertical:hover,
+QListWidget#HistoryRunsList QScrollBar::handle:vertical:hover,
+QListWidget#HistoryDetailsList QScrollBar::handle:vertical:hover,
 QTextEdit#ConversionLogs QScrollBar::handle:vertical:hover,
 QListWidget#ConversionProgressList QScrollBar::handle:vertical:hover {
     background: #6a6a6a;
 }
 QListWidget#SearchResults QScrollBar::add-line:vertical,
 QListWidget#SelectedResults QScrollBar::add-line:vertical,
+QListWidget#HistoryRunsList QScrollBar::add-line:vertical,
+QListWidget#HistoryDetailsList QScrollBar::add-line:vertical,
 QListWidget#SearchResults QScrollBar::sub-line:vertical,
 QListWidget#SelectedResults QScrollBar::sub-line:vertical,
+QListWidget#HistoryRunsList QScrollBar::sub-line:vertical,
+QListWidget#HistoryDetailsList QScrollBar::sub-line:vertical,
 QTextEdit#ConversionLogs QScrollBar::add-line:vertical,
 QTextEdit#ConversionLogs QScrollBar::sub-line:vertical,
 QListWidget#ConversionProgressList QScrollBar::add-line:vertical,
@@ -611,18 +698,24 @@ QListWidget#ConversionProgressList QScrollBar::sub-line:vertical {
 }
 QListWidget#SearchResults QScrollBar::sub-line:vertical,
 QListWidget#SelectedResults QScrollBar::sub-line:vertical,
+QListWidget#HistoryRunsList QScrollBar::sub-line:vertical,
+QListWidget#HistoryDetailsList QScrollBar::sub-line:vertical,
 QTextEdit#ConversionLogs QScrollBar::sub-line:vertical,
 QListWidget#ConversionProgressList QScrollBar::sub-line:vertical {
     subcontrol-position: top;
 }
 QListWidget#SearchResults QScrollBar::add-line:vertical,
 QListWidget#SelectedResults QScrollBar::add-line:vertical,
+QListWidget#HistoryRunsList QScrollBar::add-line:vertical,
+QListWidget#HistoryDetailsList QScrollBar::add-line:vertical,
 QTextEdit#ConversionLogs QScrollBar::add-line:vertical,
 QListWidget#ConversionProgressList QScrollBar::add-line:vertical {
     subcontrol-position: bottom;
 }
 QListWidget#SearchResults QScrollBar::up-arrow:vertical,
 QListWidget#SelectedResults QScrollBar::up-arrow:vertical,
+QListWidget#HistoryRunsList QScrollBar::up-arrow:vertical,
+QListWidget#HistoryDetailsList QScrollBar::up-arrow:vertical,
 QTextEdit#ConversionLogs QScrollBar::up-arrow:vertical,
 QListWidget#ConversionProgressList QScrollBar::up-arrow:vertical {
     image: url("__SCROLL_UP_ICON__");
@@ -631,6 +724,8 @@ QListWidget#ConversionProgressList QScrollBar::up-arrow:vertical {
 }
 QListWidget#SearchResults QScrollBar::down-arrow:vertical,
 QListWidget#SelectedResults QScrollBar::down-arrow:vertical,
+QListWidget#HistoryRunsList QScrollBar::down-arrow:vertical,
+QListWidget#HistoryDetailsList QScrollBar::down-arrow:vertical,
 QTextEdit#ConversionLogs QScrollBar::down-arrow:vertical,
 QListWidget#ConversionProgressList QScrollBar::down-arrow:vertical {
     image: url("__SCROLL_DOWN_ICON__");
@@ -639,8 +734,12 @@ QListWidget#ConversionProgressList QScrollBar::down-arrow:vertical {
 }
 QListWidget#SearchResults QScrollBar::add-page:vertical,
 QListWidget#SelectedResults QScrollBar::add-page:vertical,
+QListWidget#HistoryRunsList QScrollBar::add-page:vertical,
+QListWidget#HistoryDetailsList QScrollBar::add-page:vertical,
 QListWidget#SearchResults QScrollBar::sub-page:vertical,
 QListWidget#SelectedResults QScrollBar::sub-page:vertical,
+QListWidget#HistoryRunsList QScrollBar::sub-page:vertical,
+QListWidget#HistoryDetailsList QScrollBar::sub-page:vertical,
 QTextEdit#ConversionLogs QScrollBar::add-page:vertical,
 QTextEdit#ConversionLogs QScrollBar::sub-page:vertical,
 QListWidget#ConversionProgressList QScrollBar::add-page:vertical,
@@ -751,7 +850,9 @@ class InstantTooltipStyle(QProxyStyle):
     def styleHint(self, hint, option=None, widget=None, returnData=None):
         if hint == QStyle.StyleHint.SH_ToolTip_WakeUpDelay:
             return 0
-        return super().styleHint(hint, option, widget, returnData)
+        if hint == QStyle.StyleHint.SH_ToolTip_FallAsleepDelay:
+            return 0
+        return QProxyStyle.styleHint(self, hint, option, widget, returnData)
 
 
 class ConfirmPopup(QFrame):
@@ -1073,7 +1174,7 @@ class ActionConfirmDialog(QDialog):
 
         buttons_row = QWidget()
         buttons_layout = QHBoxLayout(buttons_row)
-        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setContentsMargins(0, 8, 0, 0)
         buttons_layout.setSpacing(8)
         buttons_layout.addStretch(1)
 
@@ -1254,12 +1355,22 @@ class MiniPopup(QFrame):
     def _show_copy_hint(self, button: QObject) -> None:
         if not isinstance(button, QWidget):
             return
+        self._hide_copy_hint()
+        hint = HoverHint("Click to copy version")
+        hint.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        hint.adjustSize()
         x = button.width() + 8
-        y = button.height() // 2
-        QToolTip.showText(button.mapToGlobal(QPoint(x, y)), "Click to copy version", button)
+        y = max(0, (button.height() - hint.height()) // 2)
+        hint.move(button.mapToGlobal(QPoint(x, y)))
+        hint.show()
+        hint.raise_()
+        self._hover_hint = hint
 
     def _hide_copy_hint(self) -> None:
-        QToolTip.hideText()
+        if self._hover_hint is None:
+            return
+        self._hover_hint.close()
+        self._hover_hint = None
 
     def _on_item_clicked(self, url: str | None) -> None:
         if url and url.startswith("action:"):
@@ -1298,6 +1409,7 @@ class SearchLineEdit(QLineEdit):
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.cursorPositionChanged.connect(self._sync_input_method)
         self.textEdited.connect(self._sync_input_method)
         self.selectionChanged.connect(self._sync_input_method)
@@ -1368,6 +1480,9 @@ class SearchLineEdit(QLineEdit):
         super().keyPressEvent(event)
         QTimer.singleShot(0, self._sync_input_method)
 
+    def contextMenuEvent(self, event) -> None:
+        event.ignore()
+
 
 class AnchoredLineEdit(QLineEdit):
     def __init__(self) -> None:
@@ -1375,6 +1490,7 @@ class AnchoredLineEdit(QLineEdit):
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.setProperty("textClipped", False)
         self.cursorPositionChanged.connect(self._sync_input_method)
         self.textEdited.connect(self._sync_input_method)
@@ -1461,6 +1577,9 @@ class AnchoredLineEdit(QLineEdit):
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
+
+    def contextMenuEvent(self, event) -> None:
+        event.ignore()
 
 
 class SmoothListWidget(QListWidget):
@@ -1789,6 +1908,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(self._hard_min_width, self._hard_min_height)
         self._active_popup: MiniPopup | None = None
         self._active_popup_button: QWidget | None = None
+        self._global_hover_hint: HoverHint | None = None
+        self._tooltip_filter_active = False
+        self._global_hover_hint_closing = False
         self._search_input: SearchLineEdit | None = None
         self._search_results: QListWidget | None = None
         self._conversion_logs_results: QTextEdit | None = None
@@ -1800,11 +1922,23 @@ class MainWindow(QMainWindow):
         self._chart_editing_body: QFrame | None = None
         self._chart_editing_status_label: QLabel | None = None
         self._chart_editing_reset_button: QPushButton | None = None
+        self._chart_editing_reset_placeholder: QWidget | None = None
         self._chart_editing_continue_button: QPushButton | None = None
         self._chart_editing_remywiki_button: QPushButton | None = None
         self._chart_editing_buttons_row: QWidget | None = None
+        self._chart_editing_buttons_row_anim: QPropertyAnimation | None = None
+        self._chart_editing_bottom_gap: QWidget | None = None
+        self._chart_editing_bottom_gap_anim: QPropertyAnimation | None = None
         self._chart_edit_selected_widget: QWidget | None = None
         self._chart_edit_selected_song_id: int | None = None
+        self._history_previous_results: QListWidget | None = None
+        self._history_details_results: QListWidget | None = None
+        self._history_clear_button: QPushButton | None = None
+        self._history_add_to_selected_button: QPushButton | None = None
+        self._history_runs: list[ConversionHistoryRun] = []
+        self._history_selected_widget: QWidget | None = None
+        self._history_store = ConversionHistoryStore()
+        self._history_recorder = ConversionSessionRecorder(self._history_store)
         self._chart_editing_attention_on = False
         self._chart_editing_attention_timer = QTimer(self)
         self._chart_editing_attention_timer.setInterval(360)
@@ -1815,6 +1949,13 @@ class MainWindow(QMainWindow):
         self._playlevel_source_results: dict[int, SearchResult] = {}
         self._playlevel_value_overrides: dict[str, str] = {}
         self._playlevel_pending_song_ids: set[str] = set()
+        self._saved_diff_numbers_cache: dict[str, dict[str, str]] = {}
+        self._saved_diff_numbers_cache_loaded = False
+        self._saved_diff_numbers_cache_exists = False
+        self._saved_diff_numbers_cache_mtime_ns: int | None = None
+        self._saved_diff_numbers_watcher = QFileSystemWatcher(self)
+        self._saved_diff_numbers_watcher.fileChanged.connect(self._on_saved_diff_numbers_fs_changed)
+        self._saved_diff_numbers_watcher.directoryChanged.connect(self._on_saved_diff_numbers_fs_changed)
         self._pending_conversion_context: dict[str, object] | None = None
         self._awaiting_chart_editing_action = False
         self._page_stack: QStackedWidget | None = None
@@ -1822,12 +1963,14 @@ class MainWindow(QMainWindow):
         self._top_separator: QFrame | None = None
         self._main_page_button: QToolButton | None = None
         self._processing_page_button: QToolButton | None = None
+        self._history_page_button: QToolButton | None = None
         self._welcome_sound_input: QLineEdit | None = None
         self._welcome_movie_input: QLineEdit | None = None
         self._welcome_output_input: QLineEdit | None = None
         self._welcome_continue_button: QPushButton | None = None
         self._main_page_index = 0
         self._processing_page_index = 1
+        self._history_page_index = 2
         self._search_item_by_song_id: dict[int, QListWidgetItem] = {}
         self._search_selected_song_id: int | None = None
         self._pending_restore_search_song_id: int | None = None
@@ -1885,6 +2028,9 @@ class MainWindow(QMainWindow):
         self._parallel_converting = bool(
             self._settings.value("conversion/parallel_converting", True, bool)
         )
+        self._save_missing_difficulty_numbers = bool(
+            self._settings.value("conversion/save_missing_difficulty_numbers", False, bool)
+        )
         self._sound_path = str(self._settings.value("paths/sound", "", str) or "")
         self._movie_path = str(self._settings.value("paths/movie", "", str) or "")
         self._output_base_path = self._load_output_base_path()
@@ -1901,12 +2047,21 @@ class MainWindow(QMainWindow):
         self._conversion_pool = QThreadPool(self)
         self._conversion_pool.setMaxThreadCount(1)
         self._build_ui()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self._refresh_saved_diff_numbers_watcher()
+        restore_window_placement(self, self._settings)
         self._update_conversion_inputs_locked_state()
         QTimer.singleShot(0, self._maybe_show_first_run_setup)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         QTimer.singleShot(0, self._update_conversion_progress_row_widths)
+
+    def closeEvent(self, event) -> None:
+        save_window_placement(self, self._settings)
+        super().closeEvent(event)
 
     def _screen_can_fit_hard_min_size(self) -> bool:
         screen = self.screen() or QGuiApplication.primaryScreen()
@@ -1947,10 +2102,15 @@ class MainWindow(QMainWindow):
         processing_page_button = self._make_nav_button(
             "Processing && Edit", self._show_processing_page
         )
+        history_page_button = self._make_nav_button(
+            "Conversion history", self._show_history_page
+        )
         self._main_page_button = main_page_button
         self._processing_page_button = processing_page_button
+        self._history_page_button = history_page_button
         top_layout.addWidget(main_page_button)
         top_layout.addWidget(processing_page_button)
+        top_layout.addWidget(history_page_button)
         top_layout.addWidget(
             self._make_menu_button(
                 "Settings",
@@ -1998,9 +2158,21 @@ class MainWindow(QMainWindow):
         page_stack = QStackedWidget()
         page_stack.setObjectName("PageStack")
         welcome_page = self._build_first_run_page()
+        history_ui = build_conversion_history_page(SmoothListWidget)
+        history_page = history_ui.page
+        self._history_previous_results = history_ui.previous_conversions
+        self._history_details_results = history_ui.conversion_details
+        self._history_clear_button = history_ui.clear_history_button
+        self._history_add_to_selected_button = history_ui.add_to_selected_button
+        self._history_clear_button.clicked.connect(self._on_clear_history_clicked)
+        self._history_add_to_selected_button.clicked.connect(self._on_add_history_run_to_selected_clicked)
+        self._history_previous_results.currentItemChanged.connect(
+            lambda current, previous: self._on_history_run_selected(current)
+        )
         page_stack.addWidget(welcome_page)
         self._main_page_index = page_stack.addWidget(panels_row)
         self._processing_page_index = page_stack.addWidget(processing_panels_row)
+        self._history_page_index = page_stack.addWidget(history_page)
         self._page_stack = page_stack
         content_layout.addWidget(page_stack, 1)
 
@@ -2011,6 +2183,7 @@ class MainWindow(QMainWindow):
         self._show_main_page()
         self._update_chart_editing_list()
         self._update_start_conversion_button_state()
+        self._reload_conversion_history()
 
     def _build_first_run_page(self) -> QWidget:
         page = QWidget()
@@ -2209,7 +2382,7 @@ class MainWindow(QMainWindow):
         body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(8, 8, 8, 8)
+        body_layout.setContentsMargins(8, 11, 8, 5)
         body_layout.setSpacing(0)
 
         if with_action:
@@ -2221,6 +2394,7 @@ class MainWindow(QMainWindow):
             selected_results.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             selected_results.setWordWrap(True)
             selected_results.setUniformItemSizes(True)
+            selected_results.setSpacing(0)
             self._selected_results = selected_results
 
             body_layout.addWidget(selected_results, 1)
@@ -2281,6 +2455,8 @@ class MainWindow(QMainWindow):
             controls_layout.addWidget(action_button, 0, Qt.AlignmentFlag.AlignVCenter)
             body_layout.addWidget(controls_row)
         else:
+            # Move only the search row up by 3px while keeping results list position.
+            body_layout.setContentsMargins(8, 8, 8, 5)
             search_box = QFrame()
             search_box.setObjectName("SearchBox")
             search_layout = QHBoxLayout(search_box)
@@ -2318,6 +2494,7 @@ class MainWindow(QMainWindow):
             results.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             results.setWordWrap(True)
             results.setUniformItemSizes(True)
+            results.setSpacing(0)
 
             self._search_input = search_input
             self._search_results = results
@@ -2331,8 +2508,9 @@ class MainWindow(QMainWindow):
             )
 
             body_layout.addWidget(search_box)
-            body_layout.addSpacing(6)
+            body_layout.addSpacing(8)
             body_layout.addWidget(results, 1)
+            body_layout.addSpacing(3)
 
         panel_layout.addWidget(header_wrap)
         panel_layout.addWidget(header_line)
@@ -2404,7 +2582,7 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(progress_list, 0)
         body_layout.addWidget(progress_gap, 0)
         body_layout.addWidget(logs_list, 1)
-        body_layout.addSpacing(8)
+        body_layout.addSpacing(12)
 
         buttons_row = QWidget()
         buttons_layout = QHBoxLayout(buttons_row)
@@ -2429,6 +2607,7 @@ class MainWindow(QMainWindow):
         buttons_layout.addStretch(1)
         buttons_layout.addWidget(open_results_button, 0, Qt.AlignmentFlag.AlignRight)
         body_layout.addWidget(buttons_row)
+        body_layout.addSpacing(4)
 
         panel_layout.addWidget(header_wrap)
         panel_layout.addWidget(header_line)
@@ -2447,7 +2626,7 @@ class MainWindow(QMainWindow):
 
         header_wrap = QWidget()
         header_layout = QHBoxLayout(header_wrap)
-        header_layout.setContentsMargins(16, 6, 17, 7)
+        header_layout.setContentsMargins(16, 6, 2, 7)
         header_layout.setSpacing(0)
         header_wrap.setFixedHeight(42)
 
@@ -2465,6 +2644,40 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(status_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header_layout.addSpacing(6)
 
+        remywiki_button = QPushButton("Open on RemyWiki")
+        remywiki_button.setObjectName("PanelActionButton")
+        remywiki_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        remywiki_button.clicked.connect(self._on_open_remywiki_clicked)
+        remywiki_width = remywiki_button.fontMetrics().horizontalAdvance("Open on RemyWiki") + 16
+        remywiki_button.setFixedSize(remywiki_width, 22)
+        remywiki_button.setVisible(False)
+        self._chart_editing_remywiki_button = remywiki_button
+        remywiki_wrap = QWidget()
+        remywiki_wrap_layout = QVBoxLayout(remywiki_wrap)
+        remywiki_wrap_layout.setContentsMargins(0, 1, 0, 0)  # keep 1px down offset
+        remywiki_wrap_layout.setSpacing(0)
+        remywiki_wrap_layout.addWidget(remywiki_button, 0, Qt.AlignmentFlag.AlignTop)
+        header_layout.addSpacing(6)  # move button block right by 6px
+        header_layout.addWidget(remywiki_wrap, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        reset_button = QPushButton()
+        reset_button.setObjectName("SelectedResetButton")
+        reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        reset_button.setToolTip("Reset edited fields")
+        reset_button.setIcon(QIcon(self._reset_icon_pixmap(14)))
+        reset_button.setIconSize(QSize(14, 14))
+        reset_button.setFixedSize(28, 28)
+        reset_button.setVisible(False)
+        reset_button.clicked.connect(self._on_reset_chart_editing_names_clicked)
+        self._chart_editing_reset_button = reset_button
+
+        reset_placeholder = QWidget()
+        reset_placeholder.setFixedSize(28, 28)
+        reset_placeholder.setVisible(False)
+        self._chart_editing_reset_placeholder = reset_placeholder
+        header_layout.addWidget(reset_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        header_layout.addSpacing(6)
+
         continue_button = QPushButton("Skip editing and continue conversion")
         continue_button.setObjectName("HeaderTextButton")
         continue_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2472,23 +2685,21 @@ class MainWindow(QMainWindow):
         continue_button.setIconSize(QSize(11, 11))
         continue_button.setFixedHeight(22)
         continue_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        continue_button_texts = (
+            "Apply and finalize conversion",
+            "Apply and continue conversion",
+            "Skip editing and continue conversion",
+        )
+        current_continue_text = continue_button.text()
+        continue_button_fixed_width = continue_button.sizeHint().width()
+        for text in continue_button_texts:
+            continue_button.setText(text)
+            continue_button_fixed_width = max(continue_button_fixed_width, continue_button.sizeHint().width())
+        continue_button.setText(current_continue_text)
+        continue_button.setFixedWidth(continue_button_fixed_width)
         continue_button.clicked.connect(self._on_chart_editing_continue_clicked)
         continue_button.setVisible(False)
         self._chart_editing_continue_button = continue_button
-        header_layout.addWidget(continue_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        header_layout.addSpacing(6)
-
-        reset_button = QPushButton()
-        reset_button.setObjectName("SelectedResetButton")
-        reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset_button.setToolTip("Reset edited chart names")
-        reset_button.setIcon(QIcon(self._reset_icon_pixmap(14)))
-        reset_button.setIconSize(QSize(14, 14))
-        reset_button.setFixedSize(28, 28)
-        reset_button.setVisible(False)
-        reset_button.clicked.connect(self._on_reset_chart_editing_names_clicked)
-        self._chart_editing_reset_button = reset_button
-        header_layout.addWidget(reset_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         header_line = QFrame()
         header_line.setObjectName("PanelHeaderLine")
@@ -2509,31 +2720,60 @@ class MainWindow(QMainWindow):
         editing_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         editing_list.setWordWrap(True)
         editing_list.setUniformItemSizes(True)
+        editing_list.setSpacing(0)
+        editing_list.setLayoutMode(QListView.LayoutMode.Batched)
+        editing_list.setBatchSize(64)
         editing_list.viewport().installEventFilter(self)
         editing_list.currentItemChanged.connect(
             lambda current, previous: self._on_chart_editing_current_item_changed(current)
         )
         self._chart_editing_results = editing_list
         body_layout.addWidget(editing_list, 1)
-        body_layout.addSpacing(8)
+
+        bottom_gap = QWidget()
+        bottom_gap.setMinimumHeight(0)
+        bottom_gap.setMaximumHeight(0)
+        bottom_gap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        bottom_gap.setVisible(False)
+        self._chart_editing_bottom_gap = bottom_gap
+        self._chart_editing_bottom_gap_anim = QPropertyAnimation(bottom_gap, b"maximumHeight", self)
+        self._chart_editing_bottom_gap_anim.setDuration(180)
+        self._chart_editing_bottom_gap_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._chart_editing_bottom_gap_anim.valueChanged.connect(self._on_chart_editing_bottom_gap_anim_value_changed)
+        self._chart_editing_bottom_gap_anim.finished.connect(self._on_chart_editing_bottom_gap_anim_finished)
+        body_layout.addWidget(bottom_gap, 0)
 
         buttons_row = QWidget()
+        buttons_row.setMinimumHeight(0)
+        buttons_row.setMaximumHeight(0)
+        buttons_row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         buttons_layout = QHBoxLayout(buttons_row)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(8)
-        buttons_layout.addStretch(1)
         buttons_row.setVisible(False)
         self._chart_editing_buttons_row = buttons_row
+        self._chart_editing_buttons_row_anim = QPropertyAnimation(buttons_row, b"maximumHeight", self)
+        self._chart_editing_buttons_row_anim.setDuration(180)
+        self._chart_editing_buttons_row_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._chart_editing_buttons_row_anim.valueChanged.connect(self._on_chart_editing_buttons_row_anim_value_changed)
+        self._chart_editing_buttons_row_anim.finished.connect(self._on_chart_editing_buttons_row_anim_finished)
 
-        remywiki_button = QPushButton("Open on RemyWiki")
-        remywiki_button.setObjectName("PanelActionButton")
-        remywiki_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        remywiki_button.clicked.connect(self._on_open_remywiki_clicked)
-        remywiki_width = remywiki_button.fontMetrics().horizontalAdvance("Open on RemyWiki") + 16
-        remywiki_button.setFixedSize(remywiki_width, 22)
-        remywiki_button.setVisible(False)
-        self._chart_editing_remywiki_button = remywiki_button
-        buttons_layout.addWidget(remywiki_button, 0, Qt.AlignmentFlag.AlignRight)
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(
+            reset_placeholder,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        buttons_layout.addWidget(
+            reset_button,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        buttons_layout.addWidget(
+            continue_button,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
         body_layout.addWidget(buttons_row, 0)
 
         panel_layout.addWidget(header_wrap)
@@ -2565,11 +2805,25 @@ class MainWindow(QMainWindow):
         self._search_results.clear()
         self._search_item_by_song_id.clear()
         for result in results:
+            base_result = result
+            display_result = result
+            if self._show_chart_difficulty:
+                base_result = self._search_engine.ensure_levels(base_result)
+                display_result = self._apply_saved_levels_to_result(base_result)
+            if self._show_chart_genre:
+                base_result = self._search_engine.ensure_genre(base_result)
+                display_result = self._search_engine.ensure_genre(display_result)
+            if self._show_game_version:
+                if not base_result.game_name:
+                    base_result = self._search_engine.ensure_game_name(base_result)
+                if not display_result.game_name:
+                    display_result = self._search_engine.ensure_game_name(display_result)
             item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, result)
+            item.setData(Qt.ItemDataRole.UserRole, display_result)
+            item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
             self._search_results.addItem(item)
             self._search_item_by_song_id[result.song_id] = item
-            widget = self._build_search_result_widget(result)
+            widget = self._build_search_result_widget(display_result)
             item.setSizeHint(QSize(0, 56))
             self._search_results.setItemWidget(item, widget)
 
@@ -2652,6 +2906,7 @@ class MainWindow(QMainWindow):
             ("Show chart difficulty", "action:toggle_chart_difficulty"),
             ("Show game version", "action:toggle_game_version"),
             ("Show chart genre", "action:toggle_chart_genre"),
+            ("Save missing difficulty numbers", "action:toggle_save_missing_difficulty_numbers"),
             ("Reset all settings and restart", "action:reset_all_settings_restart"),
         ]
 
@@ -2672,6 +2927,8 @@ class MainWindow(QMainWindow):
             self._toggle_game_version()
         elif action == "toggle_chart_genre":
             self._toggle_chart_genre()
+        elif action == "toggle_save_missing_difficulty_numbers":
+            self._toggle_save_missing_difficulty_numbers()
         elif action == "reset_all_settings_restart":
             self._reset_all_settings_and_restart()
 
@@ -2690,6 +2947,8 @@ class MainWindow(QMainWindow):
             return self._always_skip_chart_names_editing
         if action == "toggle_open_results_after_conversion":
             return self._open_results_after_conversion
+        if action == "toggle_save_missing_difficulty_numbers":
+            return self._save_missing_difficulty_numbers
         return False
 
     def _open_file_paths_dialog(self) -> None:
@@ -2716,6 +2975,125 @@ class MainWindow(QMainWindow):
             if executable:
                 return Path(executable).resolve().parent
         return self._project_root()
+
+    def _resolve_saved_diff_numbers_path(self) -> Path:
+        if getattr(sys, "frozen", False):
+            executable = getattr(sys, "executable", "")
+            if executable:
+                return Path(executable).resolve().parent / "saved_diff_numbers.json"
+        return Path(sys.argv[0]).resolve().parent / "saved_diff_numbers.json"
+
+    def _invalidate_saved_diff_numbers_cache(self) -> None:
+        self._saved_diff_numbers_cache = {}
+        self._saved_diff_numbers_cache_loaded = False
+        self._saved_diff_numbers_cache_exists = False
+        self._saved_diff_numbers_cache_mtime_ns = None
+
+    def _refresh_saved_diff_numbers_watcher(self) -> None:
+        path = self._resolve_saved_diff_numbers_path()
+        watch_dir = str(path.parent)
+        watch_file = str(path)
+        existing_paths = self._saved_diff_numbers_watcher.files() + self._saved_diff_numbers_watcher.directories()
+        if existing_paths:
+            self._saved_diff_numbers_watcher.removePaths(existing_paths)
+        if path.parent.exists():
+            self._saved_diff_numbers_watcher.addPath(watch_dir)
+        if path.is_file():
+            self._saved_diff_numbers_watcher.addPath(watch_file)
+
+    def _on_saved_diff_numbers_fs_changed(self, _changed_path: str) -> None:
+        self._invalidate_saved_diff_numbers_cache()
+        self._refresh_saved_diff_numbers_watcher()
+        self._refresh_search_result_widgets()
+        self._refresh_selected_result_widgets()
+
+    def _get_saved_diff_numbers_data(self) -> dict[str, dict[str, str]]:
+        if not self._save_missing_difficulty_numbers:
+            return {}
+        path = self._resolve_saved_diff_numbers_path()
+        file_exists = path.is_file()
+        mtime_ns: int | None = None
+        if file_exists:
+            try:
+                mtime_ns = path.stat().st_mtime_ns
+            except Exception:
+                file_exists = False
+                mtime_ns = None
+        if (
+            self._saved_diff_numbers_cache_loaded
+            and self._saved_diff_numbers_cache_exists == file_exists
+            and self._saved_diff_numbers_cache_mtime_ns == mtime_ns
+        ):
+            return self._saved_diff_numbers_cache
+
+        self._saved_diff_numbers_cache_loaded = True
+        self._saved_diff_numbers_cache = {}
+        self._saved_diff_numbers_cache_exists = file_exists
+        self._saved_diff_numbers_cache_mtime_ns = mtime_ns
+        if not file_exists:
+            return self._saved_diff_numbers_cache
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return self._saved_diff_numbers_cache
+        if not isinstance(payload, dict):
+            return self._saved_diff_numbers_cache
+
+        loaded: dict[str, dict[str, str]] = {}
+        for song_id_display, raw_entries in payload.items():
+            key = str(song_id_display).strip()
+            if not key or not isinstance(raw_entries, dict):
+                continue
+            row: dict[str, str] = {}
+            for file_name, raw_value in raw_entries.items():
+                file_key = str(file_name).strip()
+                if not file_key:
+                    continue
+                value = str(raw_value or "").strip()
+                if value.isdigit():
+                    row[file_key] = value[:2]
+            if row:
+                loaded[key] = row
+        self._saved_diff_numbers_cache = loaded
+        return self._saved_diff_numbers_cache
+
+    def _write_saved_diff_numbers_data(self, data: dict[str, dict[str, str]]) -> None:
+        path = self._resolve_saved_diff_numbers_path()
+        payload: dict[str, dict[str, str]] = {}
+        for song_id_display, entries in data.items():
+            if not isinstance(entries, dict):
+                continue
+            key = str(song_id_display).strip()
+            if not key:
+                continue
+            row: dict[str, str] = {}
+            for file_name, raw_value in entries.items():
+                name = str(file_name).strip()
+                value = str(raw_value or "").strip()
+                if name and value.isdigit():
+                    row[name] = value[:2]
+            if row:
+                payload[key] = row
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as error:
+            self._append_conversion_log(
+                f"Failed: could not save missing difficulty numbers: {error}",
+                error=True,
+            )
+            return
+        self._saved_diff_numbers_cache = payload
+        self._saved_diff_numbers_cache_loaded = True
+        self._saved_diff_numbers_cache_exists = True
+        try:
+            self._saved_diff_numbers_cache_mtime_ns = path.stat().st_mtime_ns
+        except Exception:
+            self._saved_diff_numbers_cache_mtime_ns = None
+        self._refresh_saved_diff_numbers_watcher()
 
     def _load_output_base_path(self) -> str:
         default_path = str(self._default_output_base_path())
@@ -2864,13 +3242,17 @@ class MainWindow(QMainWindow):
             return selected
         for row_index in range(self._selected_results.count()):
             item = self._selected_results.item(row_index)
-            result = item.data(Qt.ItemDataRole.UserRole + 1)
-            if not isinstance(result, SearchResult):
+            base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+            if not isinstance(base_result, SearchResult):
+                base_result = item.data(Qt.ItemDataRole.UserRole + 1)
+            if not isinstance(base_result, SearchResult):
                 continue
-            result = self._search_engine.ensure_levels(result)
+            base_result = self._search_engine.ensure_levels(base_result)
+            result = self._apply_saved_levels_to_result(base_result)
             result = self._search_engine.ensure_genre(result)
             if not result.game_name:
                 result = self._search_engine.ensure_game_name(result)
+            item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
             item.setData(Qt.ItemDataRole.UserRole + 1, result)
             selected.append(result)
         return selected
@@ -2986,7 +3368,7 @@ class MainWindow(QMainWindow):
             progress_bar.update()
         progress_bar.setValue(bounded)
         progress_bar.setFormat(f"{bounded}%")
-        use_dark_text = bounded >= 55
+        use_dark_text = False
         if bool(progress_bar.property("textDark")) != use_dark_text:
             progress_bar.setProperty("textDark", use_dark_text)
             progress_bar.style().unpolish(progress_bar)
@@ -3162,6 +3544,7 @@ class MainWindow(QMainWindow):
             return
         warning_single = self._chart_editing_warning_message(1)
         warning_multi = self._chart_editing_warning_message(2)
+        warning_check_line = "Check Chart Editing panel to continue."
         finish_editing_first = (
             'Finish chart editing first (use "Apply and continue conversion" button '
             'or "Skip editing and continue conversion" button).'
@@ -3172,7 +3555,11 @@ class MainWindow(QMainWindow):
             for line in lines
             if (
                 line not in {warning_single, warning_multi, finish_editing_first}
+                and line != warning_check_line
                 and not line.startswith("Difficulty not found for .bme files:")
+                and not line.startswith("Difficulty not found in .bme files for:")
+                and not line.startswith("Difficulty not found in.bme files for :")
+                and re.fullmatch(r"ID:\s*\d{5}(?:,\s*ID:\s*\d{5})*\.?", line.strip()) is None
                 and not line.startswith("Missing PLAYLEVEL values:")
             )
         ]
@@ -3235,11 +3622,131 @@ class MainWindow(QMainWindow):
             f'<span style="color:#dcdcdc;">{html.escape(suffix)}</span>'
         )
 
+    def _difficulty_field_from_entry(self, label_text: str, file_name: str) -> str | None:
+        text = f"{label_text} {file_name}".upper()
+        is_dp = (" DP" in text) or text.endswith("DP") or ("DP " in text)
+        if ("14]" in text) and (" SP" not in text):
+            is_dp = True
+        if "BEGINNER" in text:
+            suffix = "b"
+        elif "NORMAL" in text:
+            suffix = "n"
+        elif "HYPER" in text:
+            suffix = "h"
+        elif "ANOTHER" in text:
+            suffix = "a"
+        elif "LEGGENDARIA" in text:
+            suffix = "l"
+        elif "14]" in text:
+            suffix = "l"
+        elif "7]" in text:
+            suffix = "l"
+        else:
+            return None
+        return f"{'dp' if is_dp else 'sp'}{suffix}_level"
+
+    def _result_with_level_override(
+        self,
+        result: SearchResult,
+        field_name: str,
+        raw_value: str | int,
+    ) -> SearchResult:
+        try:
+            value = int(raw_value)
+        except Exception:
+            value = 0
+        value = max(0, value)
+        if getattr(result, field_name, 0) == value:
+            return result
+        try:
+            return replace(result, **{field_name: value})
+        except Exception:
+            return result
+
+    def _apply_saved_levels_to_result(self, result: SearchResult) -> SearchResult:
+        data = self._get_saved_diff_numbers_data()
+        if not data:
+            return result
+        song_entries = data.get(result.song_id_display, {})
+        if not song_entries:
+            return result
+        updated = result
+        for file_name, raw_value in song_entries.items():
+            field_name = self._difficulty_field_from_entry(file_name, file_name)
+            if not field_name:
+                continue
+            updated = self._result_with_level_override(updated, field_name, raw_value)
+        return updated
+
+    def _remember_missing_difficulty_values(self) -> None:
+        if not self._save_missing_difficulty_numbers:
+            return
+        data = dict(self._get_saved_diff_numbers_data())
+        changed = False
+        for song_id, entries in self._playlevel_missing_entries.items():
+            result = self._playlevel_source_results.get(song_id)
+            if result is None:
+                continue
+            song_key = result.song_id_display
+            song_bucket = dict(data.get(song_key, {}))
+            bucket_changed = False
+            for entry in entries:
+                file_name = str(entry.get("file_name", "")).strip()
+                file_path = str(entry.get("path", "")).strip()
+                if not file_name or not file_path:
+                    continue
+                value = self._playlevel_value_overrides.get(file_path, "").strip()
+                if not value.isdigit():
+                    continue
+                normalized = value[:2]
+                if song_bucket.get(file_name) != normalized:
+                    song_bucket[file_name] = normalized
+                    bucket_changed = True
+            if bucket_changed:
+                data[song_key] = song_bucket
+                changed = True
+        if changed:
+            self._write_saved_diff_numbers_data(data)
+            self._refresh_search_result_widgets()
+            self._refresh_selected_result_widgets()
+
+    def _apply_playlevel_value_to_chart_data(
+        self,
+        song_id: int,
+        song_id_display: str,
+        label_text: str,
+        file_name: str,
+        value: str | int,
+    ) -> None:
+        field_name = self._difficulty_field_from_entry(label_text, file_name)
+        if not field_name:
+            return
+        source = self._playlevel_source_results.get(song_id)
+        if source is not None:
+            updated_source = self._result_with_level_override(source, field_name, value)
+            self._playlevel_source_results[song_id] = updated_source
+            self._conversion_chart_by_id_display[song_id_display] = updated_source
+            selected_item = self._selected_item_by_song_id.get(song_id)
+            if selected_item is not None:
+                base_result = selected_item.data(Qt.ItemDataRole.UserRole + 2)
+                if not isinstance(base_result, SearchResult):
+                    base_result = updated_source
+                else:
+                    base_result = self._result_with_level_override(base_result, field_name, value)
+                selected_item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
+                selected_item.setData(Qt.ItemDataRole.UserRole + 1, self._apply_chart_name_override(base_result))
+        try:
+            self._history_recorder.set_chart_level(song_id_display, field_name, int(value))
+        except Exception:
+            pass
+
     def _collect_missing_playlevels(self) -> int:
         self._playlevel_missing_entries.clear()
         self._playlevel_source_results.clear()
         self._playlevel_value_overrides.clear()
         self._playlevel_pending_song_ids.clear()
+        saved_data = self._get_saved_diff_numbers_data()
+        pending_song_ids: set[str] = set()
         missing_total = 0
         for song_id_display, output_dir in self._conversion_output_dirs.items():
             if not output_dir.is_dir():
@@ -3278,11 +3785,28 @@ class MainWindow(QMainWindow):
                         "label": entry_label,
                         "path": str(bme_path),
                         "file_name": bme_path.name,
+                        "song_id_display": result.song_id_display,
                     }
                 )
                 self._playlevel_source_results[result.song_id] = result
-                self._playlevel_pending_song_ids.add(result.song_id_display)
+                saved_value = str(
+                    saved_data.get(result.song_id_display, {}).get(bme_path.name, "")
+                ).strip()
+                if saved_value.isdigit():
+                    normalized = saved_value[:2]
+                    file_path = str(bme_path)
+                    self._playlevel_value_overrides[file_path] = normalized
+                    self._apply_playlevel_value_to_chart_data(
+                        result.song_id,
+                        result.song_id_display,
+                        entry_label,
+                        bme_path.name,
+                        normalized,
+                    )
+                else:
+                    pending_song_ids.add(result.song_id_display)
                 missing_total += 1
+        self._playlevel_pending_song_ids = pending_song_ids
         return missing_total
 
     def _apply_playlevel_overrides(self, allow_partial: bool = False) -> bool:
@@ -3299,13 +3823,29 @@ class MainWindow(QMainWindow):
                 if not value.isdigit():
                     return False
         try:
-            for entries in self._playlevel_missing_entries.values():
+            for song_id, entries in self._playlevel_missing_entries.items():
                 for entry in entries:
                     file_path = entry.get("path", "")
                     value = self._playlevel_value_overrides.get(file_path, "").strip()
                     if not value and allow_partial:
                         continue
                     set_bme_playlevel(Path(file_path), int(value))
+                    file_name = str(entry.get("file_name", "")).strip()
+                    label_text = str(entry.get("label", "")).strip()
+                    source = self._playlevel_source_results.get(song_id)
+                    song_id_display = (
+                        source.song_id_display
+                        if isinstance(source, SearchResult)
+                        else str(entry.get("song_id_display", "")).strip()
+                    )
+                    if song_id_display:
+                        self._apply_playlevel_value_to_chart_data(
+                            song_id,
+                            song_id_display,
+                            label_text,
+                            file_name,
+                            value,
+                        )
         except Exception as error:
             self._append_conversion_log(f"Failed: could not apply PLAYLEVEL edits: {error}", error=True)
             return False
@@ -3327,30 +3867,34 @@ class MainWindow(QMainWindow):
     def _refresh_chart_editing_header_controls(self) -> None:
         charts_count = self._chart_editing_results.count() if self._chart_editing_results is not None else 0
         show_remywiki = False
+        show_reset = False
+        show_continue = False
+        playlevel_mode = self._is_playlevel_editing_mode()
+        has_edits = self._has_chart_name_overrides()
         if self._chart_editing_status_label is not None:
             self._chart_editing_status_label.setVisible(False)
             self._chart_editing_status_label.setText("")
-        if self._is_playlevel_editing_mode():
+        if playlevel_mode:
             if self._chart_editing_reset_button is not None:
                 self._chart_editing_reset_button.setVisible(False)
+                self._chart_editing_reset_button.setEnabled(False)
             if self._chart_editing_continue_button is not None:
                 waiting = self._awaiting_chart_editing_action and charts_count > 0
-                self._chart_editing_continue_button.setVisible(waiting)
+                show_continue = waiting
+                self._chart_editing_continue_button.setVisible(show_continue)
                 if waiting:
                     text = "Apply and finalize conversion"
                     self._chart_editing_continue_button.setText(text)
-                    width = (
-                        self._chart_editing_continue_button.fontMetrics().horizontalAdvance(text)
-                        + 40
-                    )
-                    self._chart_editing_continue_button.setFixedWidth(width)
         else:
-            has_edits = self._has_chart_name_overrides()
             if self._chart_editing_reset_button is not None:
-                self._chart_editing_reset_button.setVisible(charts_count > 0 and has_edits)
+                show_reset = charts_count > 0 and has_edits
+                self._chart_editing_reset_button.setVisible(show_reset)
+                self._chart_editing_reset_button.setEnabled(has_edits)
+                self._chart_editing_reset_button.setToolTip("Reset edited fields")
             if self._chart_editing_continue_button is not None:
                 waiting = self._awaiting_chart_editing_action and charts_count > 0
-                self._chart_editing_continue_button.setVisible(waiting)
+                show_continue = waiting
+                self._chart_editing_continue_button.setVisible(show_continue)
                 if waiting:
                     text = (
                         "Apply and continue conversion"
@@ -3358,18 +3902,195 @@ class MainWindow(QMainWindow):
                         else "Skip editing and continue conversion"
                     )
                     self._chart_editing_continue_button.setText(text)
-                    width = (
-                        self._chart_editing_continue_button.fontMetrics().horizontalAdvance(text)
-                        + 40
-                    )
-                    self._chart_editing_continue_button.setFixedWidth(width)
+        apply_names_state = (not playlevel_mode) and show_continue and has_edits
+        if self._chart_editing_continue_button is not None:
+            if show_continue:
+                # Keep right edge/suffix alignment stable between Apply/Skip states.
+                self._chart_editing_continue_button.setStyleSheet(
+                    "text-align: right; padding: 0 7px 0 6px;"
+                )
+                # Keep button width tight to current text (fix over-wide Apply).
+                self._chart_editing_continue_button.setFixedWidth(
+                    self._chart_editing_continue_button.sizeHint().width()
+                )
+            else:
+                self._chart_editing_continue_button.setStyleSheet("")
 
         show_remywiki = self._resolve_chart_for_remywiki_title() is not None
         if self._chart_editing_remywiki_button is not None:
             self._chart_editing_remywiki_button.setVisible(show_remywiki)
             self._chart_editing_remywiki_button.setEnabled(show_remywiki)
+        if self._chart_editing_reset_button is not None:
+            self._chart_editing_reset_button.setProperty("applyOffset", apply_names_state)
+            self._chart_editing_reset_button.style().unpolish(self._chart_editing_reset_button)
+            self._chart_editing_reset_button.style().polish(self._chart_editing_reset_button)
+            self._chart_editing_reset_button.update()
+        if self._chart_editing_reset_placeholder is not None:
+            self._chart_editing_reset_placeholder.setVisible(show_continue and not show_reset)
+        show_bottom_actions = show_reset or show_continue
         if self._chart_editing_buttons_row is not None:
-            self._chart_editing_buttons_row.setVisible(show_remywiki)
+            if show_continue:
+                target_buttons_height = 38
+            elif show_reset and not show_continue:
+                target_buttons_height = 38
+            else:
+                target_buttons_height = 0
+            self._animate_chart_editing_buttons_row(target_buttons_height)
+            row_layout = self._chart_editing_buttons_row.layout()
+            if isinstance(row_layout, QHBoxLayout):
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                if self._chart_editing_continue_button is not None:
+                    continue_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    if show_continue:
+                        continue_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+                    row_layout.setAlignment(self._chart_editing_continue_button, continue_alignment)
+                if self._chart_editing_reset_button is not None:
+                    reset_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    if show_continue:
+                        reset_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+                    elif show_reset:
+                        reset_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+                    row_layout.setAlignment(self._chart_editing_reset_button, reset_alignment)
+                if self._chart_editing_reset_placeholder is not None:
+                    placeholder_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    if show_continue:
+                        placeholder_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+                    row_layout.setAlignment(self._chart_editing_reset_placeholder, placeholder_alignment)
+        if self._chart_editing_bottom_gap is not None:
+            target_gap_height = 2 if show_bottom_actions else 0
+            self._animate_chart_editing_bottom_gap(target_gap_height)
+        if self._chart_editing_reset_button is not None:
+            reset_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            if show_reset and not show_continue:
+                reset_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+            row_layout = self._chart_editing_reset_button.parentWidget().layout()
+            if isinstance(row_layout, QHBoxLayout):
+                if apply_names_state:
+                    row_layout.setContentsMargins(0, 0, 0, 4)
+                elif show_continue:
+                    row_layout.setContentsMargins(0, 0, 0, 4)
+                elif show_reset and not show_continue:
+                    row_layout.setContentsMargins(0, 0, 0, 1)
+                else:
+                    row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setAlignment(self._chart_editing_reset_button, reset_alignment)
+        if self._chart_editing_reset_placeholder is not None:
+            placeholder_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            if show_reset and not show_continue:
+                placeholder_alignment = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+            row_layout = self._chart_editing_reset_placeholder.parentWidget().layout()
+            if isinstance(row_layout, QHBoxLayout):
+                row_layout.setAlignment(self._chart_editing_reset_placeholder, placeholder_alignment)
+
+    def _animate_chart_editing_buttons_row(self, target_height: int) -> None:
+        row = self._chart_editing_buttons_row
+        if row is None:
+            return
+        target_height = max(0, int(target_height))
+        current_height = max(0, int(row.maximumHeight()))
+        anim = self._chart_editing_buttons_row_anim
+        if anim is not None and anim.state() == QAbstractAnimation.State.Running:
+            try:
+                current_target = int(anim.endValue())
+            except (TypeError, ValueError):
+                current_target = None
+            if current_target == target_height:
+                return
+        if current_height == target_height:
+            row.setMinimumHeight(target_height)
+            row.setMaximumHeight(target_height)
+            if target_height == 0:
+                row.setVisible(False)
+            else:
+                row.setVisible(True)
+            return
+        row.setVisible(True)
+        if anim is None:
+            row.setMinimumHeight(target_height)
+            row.setMaximumHeight(target_height)
+            if target_height == 0:
+                row.setVisible(False)
+            return
+        anim.stop()
+        anim.setStartValue(max(0, current_height))
+        anim.setEndValue(max(0, target_height))
+        anim.start()
+
+    def _on_chart_editing_buttons_row_anim_value_changed(self, value: object) -> None:
+        row = self._chart_editing_buttons_row
+        if row is None:
+            return
+        try:
+            height = max(0, int(value))
+        except (TypeError, ValueError):
+            return
+        row.setMinimumHeight(height)
+        row.setMaximumHeight(height)
+
+    def _on_chart_editing_buttons_row_anim_finished(self) -> None:
+        row = self._chart_editing_buttons_row
+        if row is None:
+            return
+        height = max(0, int(row.maximumHeight()))
+        row.setMinimumHeight(height)
+        row.setMaximumHeight(height)
+        if row.maximumHeight() <= 0:
+            row.setVisible(False)
+
+    def _animate_chart_editing_bottom_gap(self, target_height: int) -> None:
+        gap = self._chart_editing_bottom_gap
+        if gap is None:
+            return
+        target_height = max(0, int(target_height))
+        current_height = max(0, int(gap.maximumHeight()))
+        anim = self._chart_editing_bottom_gap_anim
+        if anim is not None and anim.state() == QAbstractAnimation.State.Running:
+            try:
+                current_target = int(anim.endValue())
+            except (TypeError, ValueError):
+                current_target = None
+            if current_target == target_height:
+                return
+        if current_height == target_height:
+            gap.setMinimumHeight(target_height)
+            gap.setMaximumHeight(target_height)
+            if target_height == 0:
+                gap.setVisible(False)
+            else:
+                gap.setVisible(True)
+            return
+        gap.setVisible(True)
+        if anim is None:
+            gap.setMinimumHeight(target_height)
+            gap.setMaximumHeight(target_height)
+            if target_height == 0:
+                gap.setVisible(False)
+            return
+        anim.stop()
+        anim.setStartValue(max(0, current_height))
+        anim.setEndValue(max(0, target_height))
+        anim.start()
+
+    def _on_chart_editing_bottom_gap_anim_value_changed(self, value: object) -> None:
+        gap = self._chart_editing_bottom_gap
+        if gap is None:
+            return
+        try:
+            height = max(0, int(value))
+        except (TypeError, ValueError):
+            return
+        gap.setMinimumHeight(height)
+        gap.setMaximumHeight(height)
+
+    def _on_chart_editing_bottom_gap_anim_finished(self) -> None:
+        gap = self._chart_editing_bottom_gap
+        if gap is None:
+            return
+        height = max(0, int(gap.maximumHeight()))
+        gap.setMinimumHeight(height)
+        gap.setMaximumHeight(height)
+        if gap.maximumHeight() <= 0:
+            gap.setVisible(False)
 
     def _resolve_chart_for_remywiki_title(self) -> str | None:
         if self._chart_editing_results is None:
@@ -3480,14 +4201,16 @@ class MainWindow(QMainWindow):
     def _build_chart_editing_result_widget(self, result: SearchResult, item: QListWidgetItem) -> QWidget:
         row = QFrame()
         row.setObjectName("SelectedChartItem")
+        row.setProperty("chartEditingRow", True)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(8, 6, 8, 6)
-        row_layout.setSpacing(6)
+        row_layout.setSpacing(8)
 
         left_column = QWidget()
         left_layout = QVBoxLayout(left_column)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
+        line_spacing = 6
+        left_layout.setSpacing(line_spacing)
 
         first_line = QWidget()
         first_line_layout = QHBoxLayout(first_line)
@@ -3497,9 +4220,10 @@ class MainWindow(QMainWindow):
         id_label.setObjectName("ChartEditPrefix")
         first_line_layout.addWidget(id_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        artist_input = AnchoredLineEdit()
+        artist_input = QLineEdit()
         artist_input.setText(result.artist)
         artist_input.setObjectName("ChartEditInput")
+        artist_input.setProperty("chart_edit_field", "artist")
         artist_input.setPlaceholderText("Artist")
         artist_input.setProperty("chart_editing_song_id", result.song_id)
         artist_input.installEventFilter(self)
@@ -3526,9 +4250,10 @@ class MainWindow(QMainWindow):
         dash_label.setObjectName("ChartEditPrefix")
         first_line_layout.addWidget(dash_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        title_input = AnchoredLineEdit()
+        title_input = QLineEdit()
         title_input.setText(result.title)
         title_input.setObjectName("ChartEditInput")
+        title_input.setProperty("chart_edit_field", "title")
         title_input.setPlaceholderText("Title")
         title_input.setProperty("chart_editing_song_id", result.song_id)
         title_input.installEventFilter(self)
@@ -3550,9 +4275,10 @@ class MainWindow(QMainWindow):
         genre_prefix.setObjectName("ChartEditPrefix")
         second_line_layout.addWidget(genre_prefix, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        genre_input = AnchoredLineEdit()
+        genre_input = QLineEdit()
         genre_input.setText(result.genre)
         genre_input.setObjectName("ChartEditInput")
+        genre_input.setProperty("chart_edit_field", "genre")
         genre_input.setPlaceholderText("Genre")
         genre_input.setProperty("chart_editing_song_id", result.song_id)
         genre_input.installEventFilter(self)
@@ -3586,7 +4312,12 @@ class MainWindow(QMainWindow):
         genre_input.cursorPositionChanged.connect(lambda old, new: _select_editing_item())
 
         if self._is_playlevel_editing_mode():
-            for entry in self._playlevel_missing_entries.get(result.song_id, []):
+            raw_entries = item.data(Qt.ItemDataRole.UserRole + 3)
+            if isinstance(raw_entries, list):
+                entries = [entry for entry in raw_entries if isinstance(entry, dict)]
+            else:
+                entries = self._playlevel_missing_entries.get(result.song_id, [])
+            for entry in entries:
                 level_line = QWidget()
                 level_layout = QHBoxLayout(level_line)
                 level_layout.setContentsMargins(0, 0, 0, 0)
@@ -3598,7 +4329,7 @@ class MainWindow(QMainWindow):
                 label.setText(self._difficulty_label_html(entry.get("label", "")))
                 level_layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-                value_input = AnchoredLineEdit()
+                value_input = QLineEdit()
                 value_input.setText(self._playlevel_value_overrides.get(entry.get("path", ""), ""))
                 value_input.setObjectName("ChartEditInput")
                 value_input.setPlaceholderText("Difficulty number")
@@ -3619,24 +4350,114 @@ class MainWindow(QMainWindow):
     def _update_chart_editing_list(self) -> int:
         if self._chart_editing_results is None or self._selected_results is None:
             return 0
-        if self._is_playlevel_editing_mode():
+        self._chart_editing_results.setUniformItemSizes(not self._is_playlevel_editing_mode())
+        self._chart_editing_results.setUpdatesEnabled(False)
+        viewport = self._chart_editing_results.viewport()
+        if viewport is not None:
+            viewport.setUpdatesEnabled(False)
+        try:
+            if self._is_playlevel_editing_mode():
+                self._chart_editing_results.clear()
+                flagged_count = 0
+                visible_rows: list[tuple[SearchResult, list[dict[str, str]]]] = []
+                for song_id, entries in self._playlevel_missing_entries.items():
+                    result = self._playlevel_source_results.get(song_id)
+                    if result is None:
+                        continue
+                    unresolved_entries: list[dict[str, str]] = []
+                    for entry in entries:
+                        file_path = str(entry.get("path", "")).strip()
+                        value = self._playlevel_value_overrides.get(file_path, "").strip()
+                        if not value.isdigit():
+                            unresolved_entries.append(entry)
+                    if unresolved_entries:
+                        visible_rows.append((result, unresolved_entries))
+                total_rows = len(visible_rows)
+                for row_index, (result, entries) in enumerate(visible_rows):
+                    edit_item = QListWidgetItem()
+                    edit_item.setData(Qt.ItemDataRole.UserRole, result.song_id)
+                    edit_item.setData(Qt.ItemDataRole.UserRole + 1, result)
+                    edit_item.setData(Qt.ItemDataRole.UserRole + 2, result)
+                    edit_item.setData(Qt.ItemDataRole.UserRole + 3, entries)
+                    row_widget = self._build_chart_editing_result_widget(result, edit_item)
+                    row_height = max(72, row_widget.sizeHint().height())
+                    row_widget.setFixedHeight(row_height)
+                    bottom_gap = 1 if row_index < (total_rows - 1) else 0
+                    container = QWidget()
+                    container_layout = QVBoxLayout(container)
+                    container_layout.setContentsMargins(0, 0, 0, bottom_gap)
+                    container_layout.setSpacing(0)
+                    container_layout.addWidget(row_widget)
+                    container.setMinimumHeight(row_height + bottom_gap)
+                    container.setMaximumHeight(row_height + bottom_gap)
+                    edit_item.setSizeHint(QSize(0, row_height + bottom_gap))
+                    self._chart_editing_results.addItem(edit_item)
+                    self._chart_editing_results.setItemWidget(edit_item, container)
+                    flagged_count += len(entries)
+                if self._chart_editing_results.count() > 0:
+                    selected_item: QListWidgetItem | None = None
+                    if self._chart_edit_selected_song_id is not None:
+                        for row_index in range(self._chart_editing_results.count()):
+                            candidate = self._chart_editing_results.item(row_index)
+                            if candidate.data(Qt.ItemDataRole.UserRole) == self._chart_edit_selected_song_id:
+                                selected_item = candidate
+                                break
+                    if selected_item is None:
+                        selected_item = self._chart_editing_results.item(0)
+                    self._chart_editing_results.setCurrentItem(selected_item)
+                    self._set_chart_editing_selected_visual(selected_item)
+                else:
+                    self._chart_edit_selected_song_id = None
+                    self._set_chart_editing_selected_visual(None)
+                self._refresh_chart_editing_header_controls()
+                return flagged_count
+
+            selected_song_ids: set[int] = set()
             self._chart_editing_results.clear()
             flagged_count = 0
-            for song_id, entries in self._playlevel_missing_entries.items():
-                result = self._playlevel_source_results.get(song_id)
-                if result is None:
+            for row_index in range(self._selected_results.count()):
+                item = self._selected_results.item(row_index)
+                result = item.data(Qt.ItemDataRole.UserRole + 1)
+                if not isinstance(result, SearchResult):
                     continue
+                selected_song_ids.add(result.song_id)
+
+                base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+                if not isinstance(base_result, SearchResult):
+                    base_result = result
+                base_result = self._search_engine.ensure_levels(base_result)
+                base_result = self._search_engine.ensure_genre(base_result)
+                if not base_result.game_name:
+                    base_result = self._search_engine.ensure_game_name(base_result)
+                item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
+
+                result = self._apply_chart_name_override(base_result)
+                item.setData(Qt.ItemDataRole.UserRole + 1, result)
+                base_non_standard = self._is_chart_non_standard(base_result)
+                if not base_non_standard and result.song_id not in self._chart_name_overrides:
+                    continue
+                if base_non_standard:
+                    flagged_count += 1
                 edit_item = QListWidgetItem()
                 edit_item.setData(Qt.ItemDataRole.UserRole, result.song_id)
                 edit_item.setData(Qt.ItemDataRole.UserRole + 1, result)
-                edit_item.setData(Qt.ItemDataRole.UserRole + 2, result)
-                row_height = 80 + max(0, len(entries)) * 34
-                edit_item.setSizeHint(QSize(0, row_height))
+                edit_item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
+                row_widget = self._build_chart_editing_result_widget(result, edit_item)
+                row_height = 72
+                row_widget.setFixedHeight(row_height)
+                container = QWidget()
+                container_layout = QVBoxLayout(container)
+                container_layout.setContentsMargins(0, 0, 0, 1)
+                container_layout.setSpacing(0)
+                container_layout.addWidget(row_widget)
+                container.setMinimumHeight(row_height + 1)
+                container.setMaximumHeight(row_height + 1)
+                edit_item.setSizeHint(QSize(0, row_height + 1))
                 self._chart_editing_results.addItem(edit_item)
-                self._chart_editing_results.setItemWidget(
-                    edit_item, self._build_chart_editing_result_widget(result, edit_item)
-                )
-                flagged_count += len(entries)
+                self._chart_editing_results.setItemWidget(edit_item, container)
+            for song_id in list(self._chart_name_overrides.keys()):
+                if song_id not in selected_song_ids:
+                    self._chart_name_overrides.pop(song_id, None)
             if self._chart_editing_results.count() > 0:
                 selected_item: QListWidgetItem | None = None
                 if self._chart_edit_selected_song_id is not None:
@@ -3654,63 +4475,11 @@ class MainWindow(QMainWindow):
                 self._set_chart_editing_selected_visual(None)
             self._refresh_chart_editing_header_controls()
             return flagged_count
-
-        selected_song_ids: set[int] = set()
-        self._chart_editing_results.clear()
-        flagged_count = 0
-        for row_index in range(self._selected_results.count()):
-            item = self._selected_results.item(row_index)
-            result = item.data(Qt.ItemDataRole.UserRole + 1)
-            if not isinstance(result, SearchResult):
-                continue
-            selected_song_ids.add(result.song_id)
-
-            base_result = item.data(Qt.ItemDataRole.UserRole + 2)
-            if not isinstance(base_result, SearchResult):
-                base_result = result
-            base_result = self._search_engine.ensure_levels(base_result)
-            base_result = self._search_engine.ensure_genre(base_result)
-            if not base_result.game_name:
-                base_result = self._search_engine.ensure_game_name(base_result)
-            item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
-
-            result = self._apply_chart_name_override(base_result)
-            item.setData(Qt.ItemDataRole.UserRole + 1, result)
-            base_non_standard = self._is_chart_non_standard(base_result)
-            effective_non_standard = self._is_chart_non_standard(result)
-            if not base_non_standard and result.song_id not in self._chart_name_overrides:
-                continue
-            if base_non_standard:
-                flagged_count += 1
-            edit_item = QListWidgetItem()
-            edit_item.setData(Qt.ItemDataRole.UserRole, result.song_id)
-            edit_item.setData(Qt.ItemDataRole.UserRole + 1, result)
-            edit_item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
-            edit_item.setSizeHint(QSize(0, 72))
-            self._chart_editing_results.addItem(edit_item)
-            self._chart_editing_results.setItemWidget(
-                edit_item, self._build_chart_editing_result_widget(result, edit_item)
-            )
-        for song_id in list(self._chart_name_overrides.keys()):
-            if song_id not in selected_song_ids:
-                self._chart_name_overrides.pop(song_id, None)
-        if self._chart_editing_results.count() > 0:
-            selected_item: QListWidgetItem | None = None
-            if self._chart_edit_selected_song_id is not None:
-                for row_index in range(self._chart_editing_results.count()):
-                    candidate = self._chart_editing_results.item(row_index)
-                    if candidate.data(Qt.ItemDataRole.UserRole) == self._chart_edit_selected_song_id:
-                        selected_item = candidate
-                        break
-            if selected_item is None:
-                selected_item = self._chart_editing_results.item(0)
-            self._chart_editing_results.setCurrentItem(selected_item)
-            self._set_chart_editing_selected_visual(selected_item)
-        else:
-            self._chart_edit_selected_song_id = None
-            self._set_chart_editing_selected_visual(None)
-        self._refresh_chart_editing_header_controls()
-        return flagged_count
+        finally:
+            self._chart_editing_results.setUpdatesEnabled(True)
+            if viewport is not None:
+                viewport.setUpdatesEnabled(True)
+            self._chart_editing_results.viewport().update()
 
     def _confirm_action(self, message: str) -> bool:
         dialog = ActionConfirmDialog(message, self)
@@ -3769,26 +4538,115 @@ class MainWindow(QMainWindow):
         if self._is_playlevel_editing_mode():
             if not self._playlevel_value_overrides:
                 return
-            if not self._confirm_action("Do you want to reset names?"):
+            if not self._confirm_action("Reset all edited fields ?"):
                 return
             self._playlevel_value_overrides.clear()
             self._update_chart_editing_list()
             return
         if not self._chart_name_overrides:
             return
-        if not self._confirm_action("Do you want to reset names?"):
+        if not self._confirm_action("Reset all edited fields ?"):
             return
-        if self._selected_results is None:
-            return
-        for row_index in range(self._selected_results.count()):
-            item = self._selected_results.item(row_index)
-            base_result = item.data(Qt.ItemDataRole.UserRole + 2)
-            if not isinstance(base_result, SearchResult):
-                continue
-            item.setData(Qt.ItemDataRole.UserRole + 1, base_result)
+        cleared_song_ids = set(self._chart_name_overrides.keys())
         self._chart_name_overrides.clear()
-        self._refresh_selected_result_widgets()
-        self._update_chart_editing_list()
+        self._fast_reset_selected_rows(cleared_song_ids)
+        self._fast_reset_chart_editing_rows(cleared_song_ids)
+        self._refresh_chart_editing_header_controls()
+
+    def _fast_reset_selected_rows(self, song_ids: set[int]) -> None:
+        if self._selected_results is None or not song_ids:
+            return
+        self._selected_results.setUpdatesEnabled(False)
+        viewport = self._selected_results.viewport()
+        if viewport is not None:
+            viewport.setUpdatesEnabled(False)
+        try:
+            for row_index in range(self._selected_results.count()):
+                item = self._selected_results.item(row_index)
+                song_id = item.data(Qt.ItemDataRole.UserRole)
+                if not isinstance(song_id, int) or song_id not in song_ids:
+                    continue
+                base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+                if not isinstance(base_result, SearchResult):
+                    continue
+                item.setData(Qt.ItemDataRole.UserRole + 1, base_result)
+                widget = self._selected_results.itemWidget(item)
+                if widget is None:
+                    continue
+                primary = widget.findChild(MarqueeLabel, "SelectedChartPrimary")
+                if primary is not None:
+                    primary.setText(self._primary_line_text(base_result, use_ascii=self._show_ascii_song_title))
+                secondary = widget.findChild(MarqueeLabel, "SelectedChartSecondary")
+                if secondary is not None:
+                    secondary.setText(self._secondary_line_text(base_result))
+        finally:
+            self._selected_results.setUpdatesEnabled(True)
+            if viewport is not None:
+                viewport.setUpdatesEnabled(True)
+            self._selected_results.viewport().update()
+
+    def _fast_reset_chart_editing_rows(self, song_ids: set[int]) -> None:
+        if self._chart_editing_results is None or not song_ids or self._is_playlevel_editing_mode():
+            self._update_chart_editing_list()
+            return
+        self._chart_editing_results.setUpdatesEnabled(False)
+        viewport = self._chart_editing_results.viewport()
+        if viewport is not None:
+            viewport.setUpdatesEnabled(False)
+        try:
+            rows_to_remove: list[int] = []
+            for row_index in range(self._chart_editing_results.count()):
+                item = self._chart_editing_results.item(row_index)
+                song_id = item.data(Qt.ItemDataRole.UserRole)
+                if not isinstance(song_id, int) or song_id not in song_ids:
+                    continue
+                base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+                if not isinstance(base_result, SearchResult):
+                    continue
+                item.setData(Qt.ItemDataRole.UserRole + 1, base_result)
+                if not self._is_chart_non_standard(base_result):
+                    rows_to_remove.append(row_index)
+                    continue
+                holder = self._chart_editing_results.itemWidget(item)
+                if holder is None:
+                    continue
+                row_widget = holder
+                if holder.objectName() != "SelectedChartItem":
+                    nested = holder.findChild(QFrame, "SelectedChartItem")
+                    if nested is not None:
+                        row_widget = nested
+                for edit in row_widget.findChildren(QLineEdit):
+                    field = edit.property("chart_edit_field")
+                    if field == "artist":
+                        value = base_result.artist
+                    elif field == "title":
+                        value = base_result.title
+                    elif field == "genre":
+                        value = base_result.genre
+                    else:
+                        continue
+                    blocked = edit.blockSignals(True)
+                    edit.setText(value)
+                    edit.blockSignals(blocked)
+                    edit.setCursorPosition(0)
+            for row_index in reversed(rows_to_remove):
+                removed = self._chart_editing_results.takeItem(row_index)
+                if removed is not None:
+                    del removed
+            if self._chart_editing_results.count() > 0:
+                current = self._chart_editing_results.currentItem()
+                if current is None:
+                    current = self._chart_editing_results.item(0)
+                    self._chart_editing_results.setCurrentItem(current)
+                self._set_chart_editing_selected_visual(current)
+            else:
+                self._chart_edit_selected_song_id = None
+                self._set_chart_editing_selected_visual(None)
+        finally:
+            self._chart_editing_results.setUpdatesEnabled(True)
+            if viewport is not None:
+                viewport.setUpdatesEnabled(True)
+            self._chart_editing_results.viewport().update()
 
     def _on_chart_editing_continue_clicked(self) -> None:
         if not self._awaiting_chart_editing_action:
@@ -3798,7 +4656,7 @@ class MainWindow(QMainWindow):
             confirmed_with_empty = False
             if missing_count > 0:
                 if not self._confirm_action(
-                    "Difficulty fields are empty, are you sure you want finalize conversion ?"
+                    "Difficulty fields are empty. Finalize conversion anyway?"
                 ):
                     self._set_chart_editing_attention(True)
                     return
@@ -3808,27 +4666,8 @@ class MainWindow(QMainWindow):
             if not self._apply_playlevel_overrides(allow_partial=True):
                 self._set_chart_editing_attention(True)
                 return
-            self._awaiting_chart_editing_action = False
-            self._set_chart_editing_attention(False)
-            self._chart_editing_mode = "names"
-            self._playlevel_missing_entries.clear()
-            self._playlevel_source_results.clear()
-            self._playlevel_value_overrides.clear()
-            for song_id_display in list(self._playlevel_pending_song_ids):
-                self._set_conversion_chart_progress(song_id_display, 100)
-            self._playlevel_pending_song_ids.clear()
-            self._update_chart_editing_list()
-            self._clear_chart_editing_warning_logs()
-            self._conversion_active = False
-            self._append_conversion_log(
-                f"Finished. Success: {self._conversion_succeeded_total}, "
-                f"Failed: {self._conversion_failed_total}"
-            )
-            self._clear_selected_charts_after_start()
-            self._update_start_conversion_button_state()
-            self._update_conversion_inputs_locked_state()
-            if self._open_results_after_conversion:
-                self._open_results_folder()
+            self._remember_missing_difficulty_values()
+            self._complete_playlevel_finalize()
             return
 
         context = self._pending_conversion_context
@@ -3883,6 +4722,31 @@ class MainWindow(QMainWindow):
             edited_count,
         )
 
+    def _complete_playlevel_finalize(self) -> None:
+        self._awaiting_chart_editing_action = False
+        self._set_chart_editing_attention(False)
+        self._chart_editing_mode = "names"
+        self._playlevel_missing_entries.clear()
+        self._playlevel_source_results.clear()
+        self._playlevel_value_overrides.clear()
+        for song_id_display in self._conversion_output_dirs.keys():
+            self._set_conversion_chart_progress(song_id_display, 100)
+        self._playlevel_pending_song_ids.clear()
+        self._update_chart_editing_list()
+        self._clear_chart_editing_warning_logs()
+        self._conversion_active = False
+        self._append_conversion_log(
+            f"Finished. Success: {self._conversion_succeeded_total}, "
+            f"Failed: {self._conversion_failed_total}"
+        )
+        self._history_runs = self._history_recorder.finalize()
+        self._reload_conversion_history()
+        self._clear_selected_charts_after_start()
+        self._update_start_conversion_button_state()
+        self._update_conversion_inputs_locked_state()
+        if self._open_results_after_conversion:
+            self._open_results_folder()
+
     def _begin_conversion(
         self,
         charts: list[SearchResult],
@@ -3898,6 +4762,13 @@ class MainWindow(QMainWindow):
         edited_count: int,
     ) -> None:
         self._clear_chart_editing_warning_logs()
+        history_charts: list[SearchResult] = []
+        for chart in charts:
+            enriched = self._search_engine.ensure_genre(chart)
+            if not enriched.game_name:
+                enriched = self._search_engine.ensure_game_name(enriched)
+            history_charts.append(enriched)
+        self._history_recorder.start(history_charts)
         self._conversion_output_dirs.clear()
         self._conversion_chart_by_id_display = {chart.song_id_display: chart for chart in charts}
         self._reset_conversion_progress_rows(charts)
@@ -3961,8 +4832,8 @@ class MainWindow(QMainWindow):
             return list(charts), False
 
         question = (
-            "Some chart folders already exist in Results.\n"
-            "Overwrite all matching chart folders by song ID?"
+            "Some chart folders already exist in the Results folder.\n"
+            "Overwrite them?"
         )
         if self._confirm_action(question):
             return list(charts), True
@@ -4178,9 +5049,12 @@ class MainWindow(QMainWindow):
             song_id_display, output_path = done_match.groups()
             self._conversion_output_dirs[song_id_display] = Path(output_path.strip())
             self._set_conversion_chart_progress(song_id_display, 99)
+            self._history_recorder.mark_success(song_id_display)
         failed_match = re.match(r"^Failed:\s*(\d{5})\s*:", rendered)
         if failed_match:
-            self._set_conversion_chart_failed(failed_match.group(1))
+            song_id_display = failed_match.group(1)
+            self._set_conversion_chart_failed(song_id_display)
+            self._history_recorder.mark_failed(song_id_display)
         self._append_conversion_log(message)
 
     def _resolve_current_conversion_paths(self) -> tuple[Path, Path, Path, Path] | None:
@@ -4213,19 +5087,29 @@ class MainWindow(QMainWindow):
         self._active_conversion_workers.clear()
         missing_playlevels = self._collect_missing_playlevels()
         if missing_playlevels > 0:
+            if (
+                self._save_missing_difficulty_numbers
+                and self._missing_playlevel_values_count() == 0
+                and self._apply_playlevel_overrides(allow_partial=False)
+            ):
+                self._remember_missing_difficulty_values()
+                self._complete_playlevel_finalize()
+                return
             self._chart_editing_mode = "playlevel"
             self._awaiting_chart_editing_action = True
-            missing_labels: list[str] = []
-            for entries in self._playlevel_missing_entries.values():
-                for entry in entries:
-                    label = entry.get("label", "").strip()
-                    if label:
-                        missing_labels.append(label)
-            summary = ", ".join(missing_labels[:8])
-            if len(missing_labels) > 8:
-                summary += ", ..."
+            missing_ids: list[str] = []
+            for song_id, entries in self._playlevel_missing_entries.items():
+                if not entries:
+                    continue
+                result = self._playlevel_source_results.get(song_id)
+                if isinstance(result, SearchResult):
+                    missing_ids.append(result.song_id_display)
+                else:
+                    missing_ids.append(f"{song_id:05d}")
+            missing_ids = sorted(set(missing_ids))
+            summary = ", ".join(f"ID: {song_id}" for song_id in missing_ids)
             self._append_conversion_log(
-                f"Difficulty not found for .bme files: {summary}. "
+                f"Difficulty not found in .bme files for:\n{summary}.\n"
                 "Check Chart Editing panel to continue.",
                 warning=True,
             )
@@ -4250,11 +5134,15 @@ class MainWindow(QMainWindow):
             f"Finished. Success: {self._conversion_succeeded_total}, "
             f"Failed: {self._conversion_failed_total}"
         )
+        self._history_runs = self._history_recorder.finalize()
+        self._reload_conversion_history()
         self._clear_selected_charts_after_start()
         if self._open_results_after_conversion:
             self._open_results_folder()
 
     def _clear_selected_charts_after_start(self) -> None:
+        if not self._conversion_active:
+            self._history_recorder.clear()
         if self._selected_results is not None:
             self._selected_results.clear()
         self._selected_item_by_song_id.clear()
@@ -4349,12 +5237,40 @@ class MainWindow(QMainWindow):
         )
         self._settings.sync()
 
+    def _toggle_save_missing_difficulty_numbers(self) -> None:
+        self._save_missing_difficulty_numbers = not self._save_missing_difficulty_numbers
+        self._settings.setValue(
+            "conversion/save_missing_difficulty_numbers",
+            self._save_missing_difficulty_numbers,
+        )
+        self._settings.sync()
+        self._invalidate_saved_diff_numbers_cache()
+        self._refresh_search_result_widgets()
+        self._refresh_selected_result_widgets()
+
     def _on_show_ascii_song_title_toggled(self, checked: bool) -> None:
         self._show_ascii_song_title = bool(checked)
         self._settings.setValue("ui/show_ascii_song_title", self._show_ascii_song_title)
         self._settings.sync()
-        self._refresh_search_result_widgets()
-        self._refresh_selected_result_widgets()
+        search_list = self._search_results
+        selected_list = self._selected_results
+        frozen_widgets: list[QWidget] = []
+        for widget in (search_list, selected_list):
+            if widget is None:
+                continue
+            frozen_widgets.append(widget)
+            widget.setUpdatesEnabled(False)
+            viewport = widget.viewport()
+            if viewport is not None:
+                frozen_widgets.append(viewport)
+                viewport.setUpdatesEnabled(False)
+        try:
+            self._refresh_search_result_widgets()
+            self._refresh_selected_result_widgets()
+        finally:
+            for widget in reversed(frozen_widgets):
+                widget.setUpdatesEnabled(True)
+                widget.update()
 
     def _on_chart_editing_current_item_changed(self, item: QListWidgetItem | None) -> None:
         if self._awaiting_chart_editing_action:
@@ -4383,11 +5299,16 @@ class MainWindow(QMainWindow):
         widget = self._chart_editing_results.itemWidget(item)
         if widget is None:
             return
-        widget.setProperty("selected", True)
-        widget.style().unpolish(widget)
-        widget.style().polish(widget)
-        widget.update()
-        self._chart_edit_selected_widget = widget
+        target_widget = widget
+        if widget.objectName() != "SelectedChartItem":
+            nested = widget.findChild(QFrame, "SelectedChartItem")
+            if nested is not None:
+                target_widget = nested
+        target_widget.setProperty("selected", True)
+        target_widget.style().unpolish(target_widget)
+        target_widget.style().polish(target_widget)
+        target_widget.update()
+        self._chart_edit_selected_widget = target_widget
 
     def _append_conversion_log(self, message: str, error: bool = False, warning: bool = False) -> None:
         rendered = message
@@ -4401,18 +5322,19 @@ class MainWindow(QMainWindow):
             success_count, failed_count = finished_match.groups()
             cursor.insertHtml(
                 "Finished. Success: "
-                f'<span style="color:#00e37f;">{html.escape(success_count)}</span>, '
+                f'<span style="color:#40c977;">{html.escape(success_count)}</span>, '
                 "Failed: "
                 f'<span style="color:#be0420;">{html.escape(failed_count)}</span>'
             )
         else:
             if warning:
-                line_color = "#f2c94c"
+                line_color = "#b88f00"
             elif error or rendered.startswith("Failed:"):
                 line_color = "#be0420"
             else:
                 line_color = "#f0f0f0"
-            cursor.insertHtml(f'<span style="color:{line_color};">{html.escape(rendered)}</span>')
+            rendered_html = html.escape(rendered).replace("\n", "<br/>")
+            cursor.insertHtml(f'<span style="color:{line_color};">{rendered_html}</span>')
         cursor.insertBlock()
         self._conversion_logs_results.setTextCursor(cursor)
         self._conversion_logs_results.ensureCursorVisible()
@@ -4473,15 +5395,20 @@ class MainWindow(QMainWindow):
 
         for row_index in range(self._search_results.count()):
             item = self._search_results.item(row_index)
-            result = item.data(Qt.ItemDataRole.UserRole)
-            if not isinstance(result, SearchResult):
+            base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+            if not isinstance(base_result, SearchResult):
+                base_result = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(base_result, SearchResult):
                 continue
+            result = base_result
             if self._show_chart_difficulty:
                 result = self._search_engine.ensure_levels(result)
+                result = self._apply_saved_levels_to_result(result)
             if self._show_chart_genre:
                 result = self._search_engine.ensure_genre(result)
             if self._show_game_version and not result.game_name:
                 result = self._search_engine.ensure_game_name(result)
+            item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
             item.setData(Qt.ItemDataRole.UserRole, result)
             widget = self._build_search_result_widget(result)
             self._search_results.setItemWidget(item, widget)
@@ -4502,17 +5429,28 @@ class MainWindow(QMainWindow):
         matched_song_id = self._matched_selected_song_id
         for row_index in range(self._selected_results.count()):
             item = self._selected_results.item(row_index)
-            result = item.data(Qt.ItemDataRole.UserRole + 1)
-            if isinstance(result, SearchResult):
-                if self._show_chart_difficulty:
-                    result = self._search_engine.ensure_levels(result)
-                if self._show_chart_genre:
-                    result = self._search_engine.ensure_genre(result)
-                if self._show_game_version and not result.game_name:
-                    result = self._search_engine.ensure_game_name(result)
-                item.setData(Qt.ItemDataRole.UserRole + 1, result)
-                widget = self._build_selected_result_widget(result, item)
-                self._selected_results.setItemWidget(item, widget)
+            base_result = item.data(Qt.ItemDataRole.UserRole + 2)
+            if not isinstance(base_result, SearchResult):
+                base_result = item.data(Qt.ItemDataRole.UserRole + 1)
+            if not isinstance(base_result, SearchResult):
+                continue
+            display_result = base_result
+            if self._show_chart_difficulty:
+                base_result = self._search_engine.ensure_levels(base_result)
+                display_result = self._apply_saved_levels_to_result(base_result)
+            if self._show_chart_genre:
+                base_result = self._search_engine.ensure_genre(base_result)
+                display_result = self._search_engine.ensure_genre(display_result)
+            if self._show_game_version:
+                if not base_result.game_name:
+                    base_result = self._search_engine.ensure_game_name(base_result)
+                if not display_result.game_name:
+                    display_result = self._search_engine.ensure_game_name(display_result)
+            item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
+            result = self._apply_chart_name_override(display_result)
+            item.setData(Qt.ItemDataRole.UserRole + 1, result)
+            widget = self._build_selected_result_widget(result, item)
+            self._selected_results.setItemWidget(item, widget)
         if matched_song_id is not None:
             self._matched_selected_song_id = None
             self._highlight_selected_chart(matched_song_id)
@@ -4545,7 +5483,9 @@ class MainWindow(QMainWindow):
             return
         if item is None:
             return
-        result = item.data(Qt.ItemDataRole.UserRole)
+        result = item.data(Qt.ItemDataRole.UserRole + 2)
+        if not isinstance(result, SearchResult):
+            result = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(result, SearchResult):
             return
         if result.song_id in self._selected_song_ids:
@@ -4711,12 +5651,15 @@ class MainWindow(QMainWindow):
             return
         if result.song_id in self._selected_song_ids:
             return
+        self._clear_previous_conversion_history_if_needed()
+        base_result = self._search_engine.ensure_levels(result)
+        result = self._apply_saved_levels_to_result(base_result)
 
         self._selected_song_ids.add(result.song_id)
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, result.song_id)
         item.setData(Qt.ItemDataRole.UserRole + 1, result)
-        item.setData(Qt.ItemDataRole.UserRole + 2, result)
+        item.setData(Qt.ItemDataRole.UserRole + 2, base_result)
         row = self._build_selected_result_widget(result, item)
 
         item.setSizeHint(QSize(0, 56))
@@ -4725,6 +5668,24 @@ class MainWindow(QMainWindow):
         self._selected_item_by_song_id[result.song_id] = item
         self._update_chart_editing_list()
         self._update_start_conversion_button_state()
+
+    def _clear_previous_conversion_history_if_needed(self) -> None:
+        if self._conversion_active or self._selected_song_ids:
+            return
+
+        has_logs = False
+        if self._conversion_logs_results is not None:
+            has_logs = bool(self._conversion_logs_results.toPlainText().strip())
+        has_progress = bool(self._conversion_progress_bars)
+        if not has_logs and not has_progress:
+            return
+
+        self._awaiting_chart_editing_action = False
+        self._pending_conversion_context = None
+        self._set_chart_editing_attention(False)
+        if self._conversion_logs_results is not None:
+            self._conversion_logs_results.clear()
+        self._reset_conversion_progress_rows([])
 
     def _remove_selected_chart_item(self, item: QListWidgetItem) -> None:
         if self._conversion_active:
@@ -4793,7 +5754,71 @@ class MainWindow(QMainWindow):
         self._highlight_selected_chart(song_id)
         self._selected_results.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
 
+    def _hide_global_hover_hint(self) -> None:
+        if self._global_hover_hint is None or self._global_hover_hint_closing:
+            return
+        hint = self._global_hover_hint
+        self._global_hover_hint = None
+        self._global_hover_hint_closing = True
+        try:
+            hint.close()
+        finally:
+            self._global_hover_hint_closing = False
+
+    def _show_global_hover_hint(self, widget: QWidget, text: str, global_pos: QPoint | None = None) -> None:
+        if not text.strip():
+            self._hide_global_hover_hint()
+            return
+        self._hide_global_hover_hint()
+        hint = HoverHint(text)
+        hint.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        hint.adjustSize()
+        if global_pos is None:
+            global_pos = QCursor.pos()
+        hint.move(global_pos + QPoint(12, 16))
+        hint.show()
+        hint.raise_()
+        self._global_hover_hint = hint
+
+    def _tooltip_owner_and_text(self, widget: QWidget) -> tuple[QWidget | None, str]:
+        current: QWidget | None = widget
+        while current is not None:
+            text = current.toolTip().strip()
+            if text:
+                return current, text
+            current = current.parentWidget()
+        return None, ""
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.ToolTip:
+            if self._tooltip_filter_active:
+                return False
+            if isinstance(watched, QWidget):
+                owner, text = self._tooltip_owner_and_text(watched)
+                if owner is not None and text:
+                    global_pos = None
+                    if hasattr(event, "globalPos"):
+                        try:
+                            global_pos = event.globalPos()
+                        except Exception:
+                            global_pos = None
+                    self._tooltip_filter_active = True
+                    try:
+                        self._show_global_hover_hint(owner, text, global_pos=global_pos)
+                    finally:
+                        self._tooltip_filter_active = False
+                    return True
+            return False
+
+        if event.type() in (
+            QEvent.Type.Leave,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.Wheel,
+            QEvent.Type.FocusOut,
+            QEvent.Type.Hide,
+        ):
+            self._hide_global_hover_hint()
+
         song_id_prop = watched.property("chart_editing_song_id")
         if isinstance(song_id_prop, int) and event.type() in (
             QEvent.Type.MouseButtonPress,
@@ -4810,15 +5835,6 @@ class MainWindow(QMainWindow):
             and self._awaiting_chart_editing_action
         ):
             self._set_chart_editing_attention(False)
-        if (
-            self._conversion_progress_list is not None
-            and event.type() == QEvent.Type.ToolTip
-        ):
-            parent = watched
-            while parent is not None:
-                if parent is self._conversion_progress_list or parent is self._conversion_progress_list.viewport():
-                    return True
-                parent = parent.parent()
         return super().eventFilter(watched, event)
 
     def _make_menu_button(self, title: str, items: list[tuple[str, str | None]], on_action=None) -> QToolButton:
@@ -4857,12 +5873,232 @@ class MainWindow(QMainWindow):
             self._page_stack.setCurrentIndex(self._main_page_index)
         self._set_active_page_button(self._main_page_button, True)
         self._set_active_page_button(self._processing_page_button, False)
+        self._set_active_page_button(self._history_page_button, False)
 
     def _show_processing_page(self) -> None:
         if self._page_stack is not None:
             self._page_stack.setCurrentIndex(self._processing_page_index)
         self._set_active_page_button(self._main_page_button, False)
         self._set_active_page_button(self._processing_page_button, True)
+        self._set_active_page_button(self._history_page_button, False)
+
+    def _show_history_page(self) -> None:
+        self._reload_conversion_history()
+        if self._page_stack is not None:
+            self._page_stack.setCurrentIndex(self._history_page_index)
+        self._set_active_page_button(self._main_page_button, False)
+        self._set_active_page_button(self._processing_page_button, False)
+        self._set_active_page_button(self._history_page_button, True)
+
+    def _on_clear_history_clicked(self) -> None:
+        if not self._confirm_action("Clear all conversion history?"):
+            return
+        self._history_store.save_runs([])
+        self._history_runs = []
+        self._set_history_selected_visual(None)
+        self._reload_conversion_history()
+
+    def _reload_conversion_history(self) -> None:
+        if self._history_previous_results is None or self._history_details_results is None:
+            return
+        self._history_runs = self._history_store.load_runs()
+        self._backfill_history_metadata()
+        if self._history_clear_button is not None:
+            has_runs = bool(self._history_runs)
+            self._history_clear_button.setEnabled(has_runs)
+            self._history_clear_button.setToolTip("" if has_runs else "No history to clear")
+        if self._history_add_to_selected_button is not None:
+            has_runs = bool(self._history_runs)
+            self._history_add_to_selected_button.setEnabled(has_runs)
+            self._history_add_to_selected_button.setToolTip(
+                "" if has_runs else "No conversion session selected"
+            )
+        selected_run_id: str | None = None
+        current_item = self._history_previous_results.currentItem()
+        if current_item is not None:
+            current_id = current_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(current_id, str):
+                selected_run_id = current_id
+        render_runs_list(self._history_previous_results, self._history_runs)
+        selected_item = None
+        if selected_run_id:
+            for row_index in range(self._history_previous_results.count()):
+                candidate = self._history_previous_results.item(row_index)
+                if candidate.data(Qt.ItemDataRole.UserRole) == selected_run_id:
+                    selected_item = candidate
+                    break
+        if selected_item is None and self._history_previous_results.count() > 0:
+            selected_item = self._history_previous_results.item(0)
+        if selected_item is not None:
+            self._history_previous_results.setCurrentItem(selected_item)
+            run_id = selected_item.data(Qt.ItemDataRole.UserRole)
+            run = find_run_by_id(self._history_runs, run_id) if isinstance(run_id, str) else None
+            render_run_details(self._history_details_results, run)
+            if self._history_add_to_selected_button is not None:
+                can_add = run is not None and bool(run.charts)
+                self._history_add_to_selected_button.setEnabled(can_add)
+                self._history_add_to_selected_button.setToolTip(
+                    "" if can_add else "No charts in selected session"
+                )
+        else:
+            self._set_history_selected_visual(None)
+            render_run_details(self._history_details_results, None)
+            if self._history_add_to_selected_button is not None:
+                self._history_add_to_selected_button.setEnabled(False)
+                self._history_add_to_selected_button.setToolTip("No conversion session selected")
+
+    def _on_history_run_selected(self, item: QListWidgetItem | None) -> None:
+        self._set_history_selected_visual(item)
+        if self._history_details_results is None:
+            return
+        if item is None:
+            render_run_details(self._history_details_results, None)
+            if self._history_add_to_selected_button is not None:
+                self._history_add_to_selected_button.setEnabled(False)
+                self._history_add_to_selected_button.setToolTip("No conversion session selected")
+            return
+        run_id = item.data(Qt.ItemDataRole.UserRole)
+        run = find_run_by_id(self._history_runs, run_id) if isinstance(run_id, str) else None
+        render_run_details(self._history_details_results, run)
+        if self._history_add_to_selected_button is not None:
+            can_add = run is not None and bool(run.charts)
+            self._history_add_to_selected_button.setEnabled(can_add)
+            self._history_add_to_selected_button.setToolTip(
+                "" if can_add else "No charts in selected session"
+            )
+
+    def _on_add_history_run_to_selected_clicked(self) -> None:
+        if self._history_previous_results is None:
+            return
+        selected_item = self._history_previous_results.currentItem()
+        if selected_item is None:
+            return
+        run_id = selected_item.data(Qt.ItemDataRole.UserRole)
+        run = find_run_by_id(self._history_runs, run_id) if isinstance(run_id, str) else None
+        if run is None or not run.charts:
+            return
+
+        added_any = False
+        for entry in run.charts:
+            song_id_display = entry.song_id_display.strip()
+            if not song_id_display.isdigit():
+                continue
+            try:
+                matches = self._search_engine.search(song_id_display, 1)
+            except Exception:
+                continue
+            if not matches:
+                continue
+            resolved = matches[0]
+            resolved = self._search_engine.ensure_levels(resolved)
+            resolved = self._search_engine.ensure_genre(resolved)
+            if not resolved.game_name:
+                resolved = self._search_engine.ensure_game_name(resolved)
+            had_song = resolved.song_id in self._selected_song_ids
+            self._add_selected_chart(resolved)
+            if not had_song and resolved.song_id in self._selected_song_ids:
+                added_any = True
+
+        if added_any:
+            self._refresh_selected_result_widgets()
+        self._show_main_page()
+
+    def _backfill_history_metadata(self) -> None:
+        dirty = False
+        for run in self._history_runs:
+            for entry in run.charts:
+                if entry.genre.strip() and entry.game_name.strip():
+                    has_levels = (
+                        entry.spb_level > 0
+                        or entry.spn_level > 0
+                        or entry.sph_level > 0
+                        or entry.spa_level > 0
+                        or entry.spl_level > 0
+                        or entry.dpb_level > 0
+                        or entry.dpn_level > 0
+                        or entry.dph_level > 0
+                        or entry.dpa_level > 0
+                        or entry.dpl_level > 0
+                    )
+                    if has_levels:
+                        continue
+                song_id_display = entry.song_id_display.strip()
+                if not song_id_display.isdigit():
+                    continue
+                try:
+                    matches = self._search_engine.search(song_id_display, 1)
+                except Exception:
+                    continue
+                if not matches:
+                    continue
+                resolved = matches[0]
+                resolved = self._search_engine.ensure_genre(resolved)
+                if not resolved.game_name:
+                    resolved = self._search_engine.ensure_game_name(resolved)
+                if not entry.genre.strip() and resolved.genre:
+                    entry.genre = resolved.genre
+                    dirty = True
+                if not entry.game_name.strip() and resolved.game_name:
+                    entry.game_name = resolved.game_name
+                    dirty = True
+                resolved = self._search_engine.ensure_levels(resolved)
+                if entry.spb_level != resolved.spb_level:
+                    entry.spb_level = resolved.spb_level
+                    dirty = True
+                if entry.spn_level != resolved.spn_level:
+                    entry.spn_level = resolved.spn_level
+                    dirty = True
+                if entry.sph_level != resolved.sph_level:
+                    entry.sph_level = resolved.sph_level
+                    dirty = True
+                if entry.spa_level != resolved.spa_level:
+                    entry.spa_level = resolved.spa_level
+                    dirty = True
+                if entry.spl_level != resolved.spl_level:
+                    entry.spl_level = resolved.spl_level
+                    dirty = True
+                if entry.dpb_level != resolved.dpb_level:
+                    entry.dpb_level = resolved.dpb_level
+                    dirty = True
+                if entry.dpn_level != resolved.dpn_level:
+                    entry.dpn_level = resolved.dpn_level
+                    dirty = True
+                if entry.dph_level != resolved.dph_level:
+                    entry.dph_level = resolved.dph_level
+                    dirty = True
+                if entry.dpa_level != resolved.dpa_level:
+                    entry.dpa_level = resolved.dpa_level
+                    dirty = True
+                if entry.dpl_level != resolved.dpl_level:
+                    entry.dpl_level = resolved.dpl_level
+                    dirty = True
+        if dirty:
+            self._history_store.save_runs(self._history_runs)
+
+    def _set_history_selected_visual(self, item: QListWidgetItem | None) -> None:
+        if self._history_previous_results is None:
+            return
+        if self._history_selected_widget is not None:
+            self._history_selected_widget.setProperty("selected", False)
+            self._history_selected_widget.style().unpolish(self._history_selected_widget)
+            self._history_selected_widget.style().polish(self._history_selected_widget)
+            self._history_selected_widget.update()
+            self._history_selected_widget = None
+        if item is None:
+            return
+        widget = self._history_previous_results.itemWidget(item)
+        if widget is None:
+            return
+        target_widget = widget
+        if widget.objectName() != "SelectedChartItem":
+            nested = widget.findChild(QFrame, "SelectedChartItem")
+            if nested is not None:
+                target_widget = nested
+        target_widget.setProperty("selected", True)
+        target_widget.style().unpolish(target_widget)
+        target_widget.style().polish(target_widget)
+        target_widget.update()
+        self._history_selected_widget = target_widget
 
     def _show_popup(self, button: QWidget, items: list[tuple[str, str | None]], on_action=None) -> None:
         if self._active_popup is not None:
