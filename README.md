@@ -8,7 +8,7 @@
 
 # HOW TO USE 
 
-1. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2026.227.0/iidx2bms.zip) from Releases
+1. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2026.301.0/iidx2bms.zip) from Releases
 2. Launch iidx2bms.exe
 3. Choose your `\contents\data\sound\` and `\contents\data\movie\` paths, you can also change output folder (all paths can be changed in the settings later)
 4. Find charts that you want to convert in search bar
@@ -25,7 +25,7 @@
 # HOW TO COMPILE
 Install requirements - `python -m pip install --upgrade pip && python -m pip install PyQt6 ifstools pyinstaller`
 
-Compile iidx2bms exe file - `python -m PyInstaller --noconfirm --clean --windowed --onefile --name iidx2bms --icon icon\iidx2bms_logo.ico --hidden-import PyQt6.QtSvg --hidden-import ifstools.ifs --collect-all ifstools --add-data "icon;icon" --add-data "music_data;music_data" --add-data "stagefiles;stagefiles" --add-data "one2bme;one2bme" --add-data "2dx_extract;2dx_extract" --add-data "s3p_extract;s3p_extract" --add-data "ifs_unpack;ifs_unpack" main.py`
+Compile iidx2bms exe file - `py -m PyInstaller --noconfirm --clean --windowed --onefile --name iidx2bms --icon icon\iidx2bms_logo.ico --hidden-import PyQt6.QtSvg --hidden-import ifstools.ifs --collect-all ifstools --add-data "icon;icon" --add-data "music_data;music_data" --add-data "stagefiles;stagefiles" --add-data "one2bme;one2bme" --add-data "2dx_extract;2dx_extract" --add-data "s3p_extract;s3p_extract" --add-data "ifs_unpack;ifs_unpack" main.py`
 
 
 
