@@ -285,6 +285,16 @@ def _collect_bmes(source_dir: Path, min_mtime: float) -> list[Path]:
     return sorted(candidates)
 
 
+def _is_complete_bme(path: Path) -> bool:
+    try:
+        if path.stat().st_size < 1024:
+            return False
+        raw_text, encoding = _read_text_with_fallback(path)
+    except OSError:
+        return False
+    return "#WAV" in raw_text.upper() and re.search(r"(?m)^#\d{3}\d{2}:", raw_text) is not None
+
+
 def _run_one2bme(project_root: Path, work_dir: Path, one_file: Path) -> Path:
     one2bme_exe = project_root / "one2bme" / "one2bme.exe"
     if not one2bme_exe.is_file():
@@ -335,9 +345,16 @@ def _run_one2bme(project_root: Path, work_dir: Path, one_file: Path) -> Path:
             unique_recent.append(path)
 
         if unique_recent:
-            for source_bme in unique_recent:
-                shutil.copy2(source_bme, bme_dir / source_bme.name)
-            return bme_dir
+            complete_bmes = [path for path in unique_recent if _is_complete_bme(path)]
+            if complete_bmes and len(complete_bmes) == len(unique_recent):
+                for source_bme in complete_bmes:
+                    shutil.copy2(source_bme, bme_dir / source_bme.name)
+                return bme_dir
+
+            bad_names = ", ".join(path.name for path in unique_recent if path not in complete_bmes)
+            attempt_logs.append(f"incomplete bme output: {bad_names}")
+            for stale_bme in unique_recent:
+                stale_bme.unlink(missing_ok=True)
 
     joined_logs = "\n".join(attempt_logs)
     raise RuntimeError(f"one2bme did not generate any .bme files\n{joined_logs}")

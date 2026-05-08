@@ -7,6 +7,8 @@
 
 #define RESOLUTION 192
 #define BSS_FORWARD 0x20
+#define MAX_EVENTS_PER_CHANNEL 8192
+#define MAX_BPM_EVENTS 1024
 
 typedef struct {
     uint32_t t;
@@ -46,16 +48,17 @@ static int gZeroPairsInit;
 static int gMax;
 static int gTotalNotes;
 static int gBpmCount;
-static double gBpmTime[256];
-static double gBpmList[256];
+static double gBpmTime[MAX_BPM_EVENTS];
+static double gBpmList[MAX_BPM_EVENTS];
 
-static int gEvent[51][1024][2];
+static int gEvent[51][MAX_EVENTS_PER_CHANNEL][2];
 static int gEventNum[51];
-static int gNextEvent[51][256][2];
+static int gNextEvent[51][MAX_EVENTS_PER_CHANNEL][2];
 static int gNextEventNum[51];
 static int gCompress[51];
-static int gSameTmp[256][2];
+static int gSameTmp[MAX_EVENTS_PER_CHANNEL][2];
 static int gAssign[16];
+static int gOverflow;
 
 static int gStartTime;
 static int gEndTime;
@@ -124,6 +127,7 @@ static void clear_pass_state(void) {
     gTotalNotes = 0;
     gBpmCount = -1;
     gBpmTime[0] = -1.0;
+    gOverflow = 0;
 }
 
 static void fp_process(const Ev8* e) {
@@ -141,6 +145,10 @@ static void fp_process(const Ev8* e) {
         case 0x04:
             if (e->a == 0) break;
             if (gBpmTime[0] < 0 || e->t != (uint32_t)gBpmTime[gBpmCount]) {
+                if (gBpmCount + 1 >= MAX_BPM_EVENTS) {
+                    gOverflow = 1;
+                    break;
+                }
                 gBpmCount++;
                 gBpmTime[gBpmCount] = (double)e->t;
                 gBpmList[gBpmCount] = (double)e->b / (double)e->a;
@@ -245,6 +253,10 @@ static void decrease_resolution(int i) {
 
 static void kick_event(int i, int j, int raw_t) {
     int n = gNextEventNum[i];
+    if (n >= MAX_EVENTS_PER_CHANNEL) {
+        gOverflow = 1;
+        return;
+    }
     gNextEvent[i][n][0] = raw_t;
     gNextEvent[i][n][1] = gEvent[i][j][1];
     gNextEventNum[i]++;
@@ -252,7 +264,7 @@ static void kick_event(int i, int j, int raw_t) {
 
 static void quantize(double resolution) {
     int i, j, k;
-    int change_t[256];
+    int change_t[MAX_EVENTS_PER_CHANNEL];
     double base_len = 2000.0 * 120.0 / gStartBpm / (double)RESOLUTION;
 
     gNextEventNum[49] = 0;
@@ -316,6 +328,7 @@ static void quantize(double resolution) {
 static void write_body(void) {
     int i, j, k, l;
     int channel;
+    if (gOverflow) return;
     for (i = 0; i < 51; i++) {
         switch (i) {
             case 0: channel = 11; break; case 1: channel = 12; break; case 2: channel = 13; break; case 3: channel = 14; break;
@@ -341,6 +354,10 @@ static void write_body(void) {
                     if (i != 50) write_00_repeat(gEvent[i][j][0]);
                     writing_unit(i, j);
                 } else if (gEvent[i][j][0] == gEvent[i][j - 1][0]) {
+                    if (k >= MAX_EVENTS_PER_CHANNEL) {
+                        gOverflow = 1;
+                        return;
+                    }
                     gSameTmp[k][0] = gEvent[i][j][0];
                     gSameTmp[k][1] = gEvent[i][j][1];
                     k++;
@@ -378,6 +395,7 @@ static void sp_process(const Ev8* e) {
     int a = e->a;
     int b = e->b;
     int t = (int)e->t;
+    if (gOverflow) return;
     if (dt == 0x06 && a == 0x00) gEndTime = (int)(gStartTime + 2000.0 * gBeatNum * 120.0 / gBeatDen / gStartBpm);
 
     if (dt == 0x0C || dt == 0x06) {
@@ -402,6 +420,10 @@ static void sp_process(const Ev8* e) {
             gStartBpm = gBpmList[gBpmCount];
             gNextBpm = gStartBpm;
         } else if (gEventNum[49] == 0 || t != gEvent[49][gEventNum[49] - 1][0]) {
+            if (gEventNum[49] >= MAX_EVENTS_PER_CHANNEL || gBpmCount + 1 >= MAX_BPM_EVENTS) {
+                gOverflow = 1;
+                return;
+            }
             gBpmCount++;
             gNextBpm = gBpmList[gBpmCount];
             gEvent[49][gEventNum[49]][0] = t;
@@ -413,6 +435,10 @@ static void sp_process(const Ev8* e) {
 
     if (dt == 0x05) {
         if (gEventNum[50] == 0 || t != gEvent[50][gEventNum[50] - 1][0]) {
+            if (gEventNum[50] >= MAX_EVENTS_PER_CHANNEL) {
+                gOverflow = 1;
+                return;
+            }
             gEvent[50][gEventNum[50]][0] = t;
             gEvent[50][gEventNum[50]][1] = a + b * 0x100;
             gEventNum[50]++;
@@ -424,7 +450,12 @@ static void sp_process(const Ev8* e) {
         int base = (dt == 0x00) ? 0 : 8;
         int long_base = (dt == 0x00) ? 16 : 24;
         int assign_idx = base + a;
+        if (a >= 8) return;
         if (b != 0) {
+            if (gEventNum[long_base + a] + 2 >= MAX_EVENTS_PER_CHANNEL) {
+                gOverflow = 1;
+                return;
+            }
             gEvent[long_base + a][gEventNum[long_base + a]][0] = t;
             gEvent[long_base + a][gEventNum[long_base + a]][1] = gAssign[assign_idx];
             gEventNum[long_base + a]++;
@@ -432,12 +463,20 @@ static void sp_process(const Ev8* e) {
             gEvent[long_base + a][gEventNum[long_base + a]][1] = gAssign[assign_idx];
             gEventNum[long_base + a]++;
             if (a == 0x07) {
+                if (gEventNum[base + a] >= MAX_EVENTS_PER_CHANNEL) {
+                    gOverflow = 1;
+                    return;
+                }
                 gEvent[long_base + a][gEventNum[long_base + a] - 1][0] -= BSS_FORWARD;
                 gEvent[base + a][gEventNum[base + a]][0] = t + b;
                 gEvent[base + a][gEventNum[base + a]][1] = -1;
                 gEventNum[base + a]++;
             }
         } else {
+            if (gEventNum[base + a] >= MAX_EVENTS_PER_CHANNEL) {
+                gOverflow = 1;
+                return;
+            }
             gEvent[base + a][gEventNum[base + a]][0] = t;
             gEvent[base + a][gEventNum[base + a]][1] = gAssign[assign_idx];
             gEventNum[base + a]++;
@@ -449,11 +488,16 @@ static void sp_process(const Ev8* e) {
         int base = (dt == 0x02) ? 0 : 8;
         int hide_base = (dt == 0x02) ? 32 : 40;
         int idx = base + a;
+        if (a >= 8) return;
         gAssign[idx] = b;
         if (a == 0x07 && gEventNum[idx] > 0 && gEvent[idx][gEventNum[idx] - 1][1] == -1) {
             gEvent[idx][gEventNum[idx] - 1][1] = b;
         }
         if (b != 0) {
+            if (gEventNum[hide_base + a] >= MAX_EVENTS_PER_CHANNEL) {
+                gOverflow = 1;
+                return;
+            }
             gEvent[hide_base + a][gEventNum[hide_base + a]][0] = t;
             gEvent[hide_base + a][gEventNum[hide_base + a]][1] = gAssign[idx];
             gEventNum[hide_base + a]++;
@@ -462,6 +506,10 @@ static void sp_process(const Ev8* e) {
     }
 
     if (dt == 0x07) {
+        if (gEventNum[48] >= MAX_EVENTS_PER_CHANNEL) {
+            gOverflow = 1;
+            return;
+        }
         gEvent[48][gEventNum[48]][0] = t;
         gEvent[48][gEventNum[48]][1] = b;
         gEventNum[48]++;
@@ -482,6 +530,7 @@ static int second_pass(uint32_t chart_adrs) {
     for (;;) {
         if (read_ev(chart_adrs, loc, &e) != 0) return -1;
         sp_process(&e);
+        if (gOverflow) return -1;
         if (e.type == 0x06) break;
         loc++;
         if (loc > 1000000) return -1;
@@ -493,6 +542,7 @@ static int second_pass(uint32_t chart_adrs) {
             Ev8 e2;
             e2.t = e.t; e2.type = 0x06; e2.a = 0; e2.b = 0;
             sp_process(&e2);
+            if (gOverflow) return -1;
         }
     } while (more);
     return 0;
