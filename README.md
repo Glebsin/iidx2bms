@@ -20,7 +20,7 @@
 
 **Tested on Windows 11, doesn't work with omnimix charts, doesn't work with charts that have more than one .2dx file, not counting _pre.2dx**
 
-**Converted charts tested only in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream) and probably working only there (or in common beatoraja too idk)**
+**Converted charts tested only in [**`LR2oraja Endless Dream`**](https://github.com/seraxis/lr2oraja-endlessdream)**
 
 # HOW TO COMPILE
 Install requirements - `python -m pip install --upgrade pip && python -m pip install PyQt6 ifstools pyinstaller`
