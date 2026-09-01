@@ -3,12 +3,12 @@
 
   <img src="https://github.com/Glebsin/iidx2bms/blob/resources/iidx2bms_logo.svg?raw=true" width="200" alt="iidx2bms logo">
 
-  <p>Tools for converting iidx 33 charts to bms charts</p>
+  <p>Tool for converting iidx 33 charts to bms charts</p>
 </div>
 
 # HOW TO USE 
 
-1. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2026.508.0/iidx2bms.zip) from Releases
+1. Download [`iidx2bms.zip`](https://github.com/Glebsin/iidx2bms/releases/download/2026.902.0/iidx2bms.zip) from Releases
 2. Launch iidx2bms.exe
 3. Choose your `\contents\data\sound\` and `\contents\data\movie\` paths, you can also change output folder (all paths can be changed in the settings later)
 4. Find charts that you want to convert in search bar
